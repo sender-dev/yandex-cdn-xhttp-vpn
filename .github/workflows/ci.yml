@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install Xray-core
+        env:
+          XRAY_VERSION: v26.3.27
+        run: |
+          base="https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}"
+          curl -fsSL -o /tmp/xray.zip "$base/Xray-linux-64.zip"
+          curl -fsSL -o /tmp/xray.dgst "$base/Xray-linux-64.zip.dgst"
+          expected=$(sed -n 's/^SHA2-256[[:space:]]*=[[:space:]]*//p' /tmp/xray.dgst)
+          test -n "$expected"
+          echo "${expected}  /tmp/xray.zip" | sha256sum -c -
+          unzip -q /tmp/xray.zip -d /tmp/xray
+          sudo install -m 755 /tmp/xray/xray /usr/local/bin/xray
+          xray version
+      - name: Shellcheck
+        run: shellcheck -S error install.sh scripts/*.sh tests/*.sh
+      - name: Tests
+        run: bash tests/run.sh

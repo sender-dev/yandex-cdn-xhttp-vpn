@@ -1,0 +1,134 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "cdn-xhttp",
+      "listen": "127.0.0.1",
+      "port": 9081,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "00000000-0000-4000-8000-000000000000",
+            "flow": ""
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": {
+          "path": "/api-stream",
+          "mode": "packet-up",
+          "uplinkHTTPMethod": "GET",
+          "uplinkDataPlacement": "header",
+          "uplinkDataKey": "X-Data",
+          "uplinkChunkSize": "3000-4000",
+          "scMaxEachPostBytes": 8192,
+          "scMaxBufferedPosts": 64,
+          "scMinPostsIntervalMs": 10,
+          "sessionPlacement": "header",
+          "sessionKey": "X-Auth-Token",
+          "seqPlacement": "query",
+          "seqKey": "page",
+          "xPaddingKey": "_rupl",
+          "xPaddingHeader": "X-Cache",
+          "xPaddingPlacement": "queryInHeader",
+          "xPaddingMethod": "tokenish",
+          "xPaddingObfsMode": true,
+          "xPaddingBytes": "100-1000",
+          "serverMaxHeaderBytes": 32768
+        }
+      }
+    },
+    {
+      "tag": "direct-reality",
+      "listen": "0.0.0.0",
+      "port": 8443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.example.com:443",
+          "serverNames": [
+            "www.example.com"
+          ],
+          "privateKey": "<REALITY_PRIVATE_KEY>",
+          "shortIds": [
+            "<SHORT_ID>"
+          ]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "cascade-reality",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<EXIT_HOST>",
+            "port": 8443,
+            "users": [
+              {
+                "id": "00000000-0000-4000-8000-000000000002",
+                "flow": "xtls-rprx-vision",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "www.example.com",
+          "fingerprint": "chrome",
+          "publicKey": "<REALITY_PUBLIC_KEY>",
+          "shortId": "<SHORT_ID>"
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "cdn-xhttp"
+        ],
+        "outboundTag": "cascade-reality"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "direct-reality"
+        ],
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}
