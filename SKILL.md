@@ -21,6 +21,8 @@ Client (Happ / v2RayTun / Hiddify)
 
 The CDN is not a magic bypass. It changes the IP and the network path the client talks to. Whether that path survives a given mobile restriction depends on the carrier, the region, and the restriction window. Only a test on the target SIM during an active restriction proves the whitelist case.
 
+This repository is a single-skill package. Install or update it with `npx skills add sender-dev/yandex-cdn-xhttp-vpn -g`, or from a clone with `./install.sh`. All paths below are relative to this skill's directory.
+
 ## Read this first
 
 These are the expensive lessons. Re-deriving them costs days.

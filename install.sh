@@ -20,6 +20,9 @@ Options:
 
 Auto-detected directories: ~/.agents/skills, ~/.claude/skills,
 ~/.codex/skills, ~/.qoder/skills. If none exist, ~/.agents/skills is created.
+
+To install without cloning, use the agent-skills CLI:
+  npx skills add sender-dev/yandex-cdn-xhttp-vpn -g
 EOF
 }
 

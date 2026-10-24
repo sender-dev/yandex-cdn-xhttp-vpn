@@ -36,6 +36,23 @@ The CDN changes the public IP and the network path. It does not guarantee that a
 
 ## Install as a skill
 
+The repository is a single-skill package, so the open agent-skills CLI can install it directly:
+
+```bash
+# Global install, then choose the agents
+npx skills add sender-dev/yandex-cdn-xhttp-vpn -g
+
+# Qoder only, available in every project
+npx skills add sender-dev/yandex-cdn-xhttp-vpn -a qoder -g
+
+# Current project only
+npx skills add sender-dev/yandex-cdn-xhttp-vpn
+```
+
+`bunx skills add ...`, `npm exec skills add ...`, and `pnpm dlx skills add ...` are equivalent. Requires Node.js 22.20 or later. The CLI sends anonymous telemetry by default; set `DISABLE_TELEMETRY=1` to opt out.
+
+Install from a clone instead:
+
 ```bash
 git clone https://github.com/sender-dev/yandex-cdn-xhttp-vpn.git
 cd yandex-cdn-xhttp-vpn
