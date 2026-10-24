@@ -84,7 +84,7 @@ for base in "${targets[@]}"; do
     fi
     if [ "$COPY" -eq 1 ]; then
         mkdir -p "$dest"
-        cp -a "$REPO_DIR/SKILL.md" "$REPO_DIR/README.md" "$REPO_DIR/LICENSE" "$dest/"
+        cp -a "$REPO_DIR/SKILL.md" "$REPO_DIR/README.md" "$REPO_DIR/USAGE.md" "$REPO_DIR/LICENSE" "$dest/"
         cp -a "$REPO_DIR/references" "$REPO_DIR/scripts" "$REPO_DIR/assets" "$dest/"
         find "$dest" -type d -name __pycache__ -prune -exec rm -rf -- {} + 2>/dev/null || true
         echo "copied: $dest"

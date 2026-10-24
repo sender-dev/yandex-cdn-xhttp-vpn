@@ -4,6 +4,8 @@ An agent skill and a small toolkit for carrying a VLESS/XHTTP tunnel through a C
 
 The skill is written for coding agents (Claude Code, Codex, Qoder, and compatible runtimes) and is also usable by a human operator. It contains the playbook, reference notes, and dependency-light scripts that turn guesses into measurements.
 
+For the end-to-end walkthrough — from the Yandex console to a profile accepted on the target SIM — read [USAGE.md](USAGE.md).
+
 ## Architecture
 
 ```text
@@ -23,6 +25,7 @@ The CDN changes the public IP and the network path. It does not guarantee that a
 | Path | Purpose |
 |---|---|
 | `SKILL.md` | The agent playbook: rules, provider gate, workflow, symptom table, evidence levels |
+| `USAGE.md` | End-to-end usage guide: working with the agent, manual deployment, command reference |
 | `references/yandex-cdn.md` | Resource shape, methods, certificate, CNAME, edge behavior |
 | `references/origin-setup.md` | nginx port 80/443, buffers, Xray inbound, logging |
 | `references/xhttp-transport.md` | Modes, header budget, full `extra` object, share-link fields |
