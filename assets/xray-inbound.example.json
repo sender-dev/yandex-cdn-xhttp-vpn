@@ -15,7 +15,7 @@
             "flow": ""
           }
         ],
-        "decryption": "none"
+        "decryption": "<VLESS_DECRYPTION_KEY>"
       },
       "streamSettings": {
         "network": "xhttp",

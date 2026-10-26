@@ -20,6 +20,7 @@ URL="https://api.telegram.org/"
 EXPECT="302"
 TIMEOUT="12"
 PRESET="yandex-get"
+VLESS_ENCRYPTION=${VLESS_ENCRYPTION:-}
 EDGE_PORT="443"
 JSON=0
 DRY_RUN=0
@@ -43,6 +44,7 @@ Options:
   --expect <code|any>   Expected HTTP status (default 302; 'any' accepts 2xx/3xx)
   --timeout <seconds>   Per-request timeout (default 12)
   --preset <name>       yandex-get or minimal (default yandex-get)
+  --vless-encryption <key>  Client key from `xray vlessenc`; `none` (default)
   --edge-port <n>       TLS port on the edge (default 443)
   --json                Machine-readable summary
   --dry-run             Validate the generated client config, send nothing
@@ -51,6 +53,7 @@ Options:
 
 Environment:
   VLESS_UUID            UUID when --uuid/--uuid-file is omitted
+  VLESS_ENCRYPTION      Client key from `xray vlessenc` when the flag is omitted
   XRAY_BIN              Xray binary (default: xray)
 
 Exit codes:
@@ -65,7 +68,7 @@ die() {
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --edge|--sni|--host|--path|--uuid|--uuid-file|--port|--attempts|--url|--expect|--timeout|--preset|--edge-port)
+        --edge|--sni|--host|--path|--uuid|--uuid-file|--port|--attempts|--url|--expect|--timeout|--preset|--vless-encryption|--edge-port)
             [ -n "${2:-}" ] || die "$1 requires a value"
             case "$1" in
                 --edge) EDGE=$2 ;;
@@ -80,6 +83,7 @@ while [ "$#" -gt 0 ]; do
                 --expect) EXPECT=$2 ;;
                 --timeout) TIMEOUT=$2 ;;
                 --preset) PRESET=$2 ;;
+                --vless-encryption) VLESS_ENCRYPTION=$2 ;;
                 --edge-port) EDGE_PORT=$2 ;;
             esac
             shift 2
@@ -138,6 +142,7 @@ profile_args=(
 )
 [ -n "$UUID" ] && profile_args+=(--uuid "$UUID")
 [ -n "$UUID_FILE" ] && profile_args+=(--uuid-file "$UUID_FILE")
+[ -n "$VLESS_ENCRYPTION" ] && profile_args+=(--vless-encryption "$VLESS_ENCRYPTION")
 
 python3 "$SCRIPT_DIR/make-profile.py" "${profile_args[@]}" >/dev/null
 

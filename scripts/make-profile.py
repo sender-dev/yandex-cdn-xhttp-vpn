@@ -14,10 +14,13 @@ import stat
 import sys
 from urllib.parse import quote, urlencode
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+VLESS_ENCRYPTION_RE = re.compile(
+    r"^mlkem768x25519plus(?:\.[A-Za-z0-9_-]+){3,}$"
 )
 HOST_RE = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
@@ -86,6 +89,18 @@ def validate_host(value, label):
     return value
 
 
+def validate_vless_encryption(value):
+    value = str(value or "").strip()
+    if not value or value == "none":
+        return "none"
+    if not VLESS_ENCRYPTION_RE.fullmatch(value):
+        fail(
+            "--vless-encryption must be a key from `xray vlessenc` "
+            "(mlkem768x25519plus...) or `none`"
+        )
+    return value
+
+
 def validate_address(value):
     value = str(value or "").strip()
     if not value or not ADDRESS_RE.fullmatch(value):
@@ -131,11 +146,11 @@ def preset(name):
     return dict(PRESETS[name])
 
 
-def build_uri(address, sni, host, path, port, uuid, label, xhttp):
+def build_uri(address, sni, host, path, port, uuid, label, xhttp, encryption="none"):
     extra = json.dumps(xhttp, separators=(",", ":"), sort_keys=True)
     query = urlencode(
         [
-            ("encryption", "none"),
+            ("encryption", encryption),
             ("security", "tls"),
             ("sni", sni),
             ("fp", "chrome"),
@@ -158,7 +173,9 @@ def build_uri(address, sni, host, path, port, uuid, label, xhttp):
     )
 
 
-def build_client_config(address, sni, host, path, port, uuid, xhttp, socks_port):
+def build_client_config(
+    address, sni, host, path, port, uuid, xhttp, socks_port, vless_encryption="none"
+):
     settings = {
         "path": path,
         "host": host,
@@ -185,7 +202,9 @@ def build_client_config(address, sni, host, path, port, uuid, xhttp, socks_port)
                         {
                             "address": address,
                             "port": port,
-                            "users": [{"id": uuid, "encryption": "none"}],
+                            "users": [
+                                {"id": uuid, "encryption": vless_encryption}
+                            ],
                         }
                     ]
                 },
@@ -235,6 +254,11 @@ def parse_args(argv=None):
     parser.add_argument("--uuid")
     parser.add_argument("--uuid-file")
     parser.add_argument("--preset", default="yandex-get", choices=sorted(PRESETS))
+    parser.add_argument(
+        "--vless-encryption",
+        help="client key from `xray vlessenc` (mlkem768x25519plus...); "
+        "`none` keeps classic VLESS. Also read from VLESS_ENCRYPTION",
+    )
     parser.add_argument("--name", default="CDN XHTTP")
     parser.add_argument("--out", help="write the share URI to this file (0600); '-' for stdout")
     parser.add_argument("--client-config", help="write an Xray client config (0600)")
@@ -257,8 +281,13 @@ def main(argv=None):
     if not 1 <= args.socks_port <= 65535:
         fail("--socks-port is out of range")
     uuid = read_uuid(args)
+    vless_encryption = validate_vless_encryption(
+        args.vless_encryption or os.environ.get("VLESS_ENCRYPTION", "")
+    )
     xhttp = preset(args.preset)
-    uri = build_uri(address, sni, host, path, args.port, uuid, args.name, xhttp)
+    uri = build_uri(
+        address, sni, host, path, args.port, uuid, args.name, xhttp, vless_encryption
+    )
 
     if args.out == "-":
         print(uri)
@@ -271,7 +300,8 @@ def main(argv=None):
 
     if args.client_config:
         config = build_client_config(
-            address, sni, host, path, args.port, uuid, xhttp, args.socks_port
+            address, sni, host, path, args.port, uuid, xhttp, args.socks_port,
+            vless_encryption,
         )
         write_private(args.client_config, json.dumps(config, indent=2, sort_keys=True))
         if not args.quiet:
@@ -290,6 +320,7 @@ def main(argv=None):
                     "path": path,
                     "port": args.port,
                     "preset": args.preset,
+                    "vless_encryption_enabled": vless_encryption != "none",
                     "uri_written": bool(args.out),
                     "client_config_written": bool(args.client_config),
                 },
