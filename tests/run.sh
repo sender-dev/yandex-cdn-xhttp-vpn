@@ -108,7 +108,54 @@ assert dump["inbounds"][0]["settings"]["decryption"].startswith(
     "mlkem768x25519plus."
 ), dump["inbounds"][0]["settings"]
 PY
-    echo "xray config: ok (client + vlessenc + inbound example)"
+
+    python3 - "$tmp/inbound-single.json" "$private_key" "$decryption_key" <<'PY'
+import json
+import sys
+
+path, private, decryption = sys.argv[1:4]
+with open("assets/xray-inbound-single.example.json", encoding="utf-8") as stream:
+    data = json.load(stream)
+for inbound in data["inbounds"]:
+    settings = inbound.get("settings", {})
+    if settings.get("decryption") == "<VLESS_DECRYPTION_KEY>":
+        settings["decryption"] = decryption
+        for client in settings.get("clients", []):
+            client.pop("encryption", None)
+    reality = inbound.get("streamSettings", {}).get("realitySettings")
+    if reality and reality.get("privateKey") == "<REALITY_PRIVATE_KEY>":
+        reality["privateKey"] = private
+        reality["shortIds"] = ["0123456789abcdef"]
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump(data, stream, indent=2)
+PY
+    xray run -test -config "$tmp/inbound-single.json" >/dev/null
+    xray run -test -dump -config "$tmp/inbound-single.json" > "$tmp/dump-single.json"
+    python3 - "$tmp/dump-single.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    dump = json.load(stream)
+by_tag = {inbound.get("tag"): inbound for inbound in dump["inbounds"]}
+assert set(by_tag) == {"cdn-xhttp", "direct-reality"}, by_tag.keys()
+assert by_tag["direct-reality"]["port"] == 443, by_tag["direct-reality"]
+settings = by_tag["cdn-xhttp"]["streamSettings"]["xhttpSettings"]
+assert settings["sessionPlacement"] == "header", settings
+assert settings["sessionKey"] == "X-Auth-Token", settings
+assert by_tag["cdn-xhttp"]["settings"]["decryption"].startswith(
+    "mlkem768x25519plus."
+), by_tag["cdn-xhttp"]["settings"]
+tags = {outbound.get("tag") for outbound in dump["outbounds"]}
+assert tags == {"direct", "blocked"}, tags
+assert "cascade-reality" not in tags, tags
+routed = {}
+for rule in dump["routing"]["rules"]:
+    for tag in rule.get("inboundTag", []):
+        routed[tag] = rule.get("outboundTag")
+assert routed == {"cdn-xhttp": "direct", "direct-reality": "direct"}, routed
+PY
+    echo "xray config: ok (client + vlessenc + cascade and single-server inbounds)"
 else
     echo "xray config: skipped (xray not on PATH)"
 fi
