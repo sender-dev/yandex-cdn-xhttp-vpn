@@ -1,0 +1,117 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "cdn-xhttp",
+      "listen": "127.0.0.1",
+      "port": 9081,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "00000000-0000-4000-8000-000000000000",
+            "flow": ""
+          }
+        ],
+        "decryption": "<VLESS_DECRYPTION_KEY>"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "none",
+        "xhttpSettings": {
+          "path": "/api-stream",
+          "mode": "packet-up",
+          "uplinkHTTPMethod": "GET",
+          "uplinkDataPlacement": "header",
+          "uplinkDataKey": "X-Data",
+          "uplinkChunkSize": "3000-4000",
+          "scMaxEachPostBytes": 8192,
+          "scMaxBufferedPosts": 64,
+          "scMinPostsIntervalMs": 10,
+          "sessionPlacement": "header",
+          "sessionKey": "X-Auth-Token",
+          "seqPlacement": "query",
+          "seqKey": "page",
+          "xPaddingKey": "_rupl",
+          "xPaddingHeader": "X-Cache",
+          "xPaddingPlacement": "queryInHeader",
+          "xPaddingMethod": "tokenish",
+          "xPaddingObfsMode": true,
+          "xPaddingBytes": "100-1000",
+          "serverMaxHeaderBytes": 32768
+        }
+      }
+    },
+    {
+      "tag": "direct-reality",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.example.com:443",
+          "serverNames": [
+            "www.example.com"
+          ],
+          "privateKey": "<REALITY_PRIVATE_KEY>",
+          "shortIds": [
+            "<SHORT_ID>"
+          ]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "ip": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "198.18.0.0/15",
+          "::1/128",
+          "fc00::/7",
+          "fe80::/10"
+        ],
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "cdn-xhttp",
+          "direct-reality"
+        ],
+        "outboundTag": "direct"
+      }
+    ]
+  }
+}
