@@ -126,7 +126,9 @@ If you need a named vhost instead of a catch-all, add `server_name cdn.example.c
 
 ## Optional 443 block
 
-The CDN may fetch over 80, but keep a 443 block for direct checks and for providers that use HTTPS to origin. This block is optional; the certificate covers the public CDN hostname, not an internal origin alias:
+The CDN may fetch over 80, but keep a 443 block for direct checks and for providers that use HTTPS to origin. This block is optional; the certificate covers the public CDN hostname, not an internal origin alias.
+
+In [single-server mode](single-server.md), Xray `direct-reality` owns `:443`. Remove this block entirely and keep nginx on `:80`; otherwise one of the two processes cannot bind. If nginx must keep `:443`, move `direct-reality` to `8443` in the Xray config and in the direct profile.
 
 ```nginx
 server {

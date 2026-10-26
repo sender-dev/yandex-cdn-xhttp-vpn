@@ -70,6 +70,8 @@ Record the current origin, Xray, nginx, and client profiles. Back up every file 
 
 The origin needs an address reachable from the edge, an nginx entry point, and a local Xray inbound. A certificate is needed only for the optional HTTPS block or for a provider that fetches origin over TLS; the tested Yandex edge fetched origin over **HTTP port 80** even when the panel claimed HTTPS, so keep the port-80 block correct and verify which vhost handled the request.
 
+Decide the topology before installing Xray. The default is [assets/xray-inbound.example.json](assets/xray-inbound.example.json): CDN origin plus a REALITY cascade to a separate exit. If CDN edges can reach the exit directly, [assets/xray-inbound-single.example.json](assets/xray-inbound-single.example.json) runs origin and exit on one server and routes to `freedom`; in that mode Xray owns `:443`, so remove the nginx 443 block. Trade-offs, validation, and rollback are in [references/single-server.md](references/single-server.md). Both assets share the same CDN-facing XHTTP framing, so the client preset does not change.
+
 Generate both secrets outside the repository and store them mode `0600`:
 
 ```bash
@@ -230,6 +232,7 @@ Read only what the task needs.
 
 - [references/yandex-cdn.md](references/yandex-cdn.md) — Yandex Cloud CDN resource, methods, certificate, CNAME, static request headers, edge behavior, support path.
 - [references/origin-setup.md](references/origin-setup.md) — hardened nginx port 80/443 blocks, secret gate, buffers, keepalive, Xray inbound with `vlessenc`, logging.
+- [references/single-server.md](references/single-server.md) — optional origin = exit mode, when one server is enough, port ownership, switching and rollback.
 - [references/xhttp-transport.md](references/xhttp-transport.md) — XHTTP modes, header budget, `vlessenc` key placement, the full `extra` object, share-link fields, client/server matching.
 - [references/diagnostics.md](references/diagnostics.md) — test ladder, vantage contamination, log correlation, interpretation rules.
 - [references/providers.md](references/providers.md) — Yandex, Selectel, Gcore, VK, Timeweb, Beget comparison and provider gate.

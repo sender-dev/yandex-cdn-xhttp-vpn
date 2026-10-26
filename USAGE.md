@@ -112,6 +112,8 @@ Phone (Happ / v2RayTun / Hiddify)
 
 Provision in this order: origin, DNS, CDN resource, propagation, edge discovery, session test, profile, device acceptance. Building the client profile earlier gives you something to debug with no ground truth.
 
+**Single-server alternative.** If CDN edges can reach the exit server directly on port 80, the same machine can be origin and exit: drop the cascade, route `cdn-xhttp` to `freedom`, and keep `direct-reality` on `:443`. The CDN-facing nginx block stays on `:80`; remove its optional `:443` block because Xray owns that port. See [references/single-server.md](references/single-server.md) for the trade-offs and rollback. The two-server cascade remains the default and is unchanged.
+
 ### 1. Back up and inventory
 
 Before changing nginx, Xray, DNS, or the CDN resource:

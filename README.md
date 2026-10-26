@@ -22,6 +22,8 @@ The CDN changes the public IP and the network path. It does not guarantee that a
 
 The edge-to-origin leg is public transit. `X-CDN-Secret` keeps direct scans of the origin from finding a working endpoint; it does not authenticate users (the UUID does) and does not block requests that travel through the CDN. `vlessenc` encrypts the VLESS payload inside the HTTP headers, so the destination and data in `X-Data-*` are opaque on that leg; the transport shape (path, method, session id, sequence) remains visible.
 
+The default topology uses a second server as the exit through a REALITY cascade. When the CDN can reach the exit directly, the optional [single-server mode](references/single-server.md) removes that hop and runs origin and exit on one machine; the cascade asset stays available unchanged.
+
 ## What is inside
 
 | Path | Purpose |
@@ -30,6 +32,7 @@ The edge-to-origin leg is public transit. `X-CDN-Secret` keeps direct scans of t
 | `USAGE.md` | End-to-end usage guide: working with the agent, manual deployment, command reference |
 | `references/yandex-cdn.md` | Resource shape, methods, certificate, CNAME, static request headers, edge behavior |
 | `references/origin-setup.md` | Hardened nginx port 80/443, secret gate, buffers, keepalive, Xray inbound |
+| `references/single-server.md` | Optional origin = exit mode: when one server is enough, port layout, rollback |
 | `references/xhttp-transport.md` | Modes, header budget, `vlessenc`, full `extra` object, share-link fields |
 | `references/diagnostics.md` | Test ladder, vantage contamination, log correlation |
 | `references/providers.md` | Yandex, Selectel, Gcore, VK, Timeweb, Beget comparison |
