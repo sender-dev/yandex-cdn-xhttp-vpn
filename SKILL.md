@@ -1,8 +1,9 @@
 ---
 name: yandex-cdn-xhttp-vpn
-description: Build, debug, and audit a VLESS/XHTTP tunnel carried through a CDN edge when the direct path is blocked or throttled — Yandex Cloud CDN is field-verified; Selectel, Gcore, VK, Timeweb, and Beget notes are included. Use when the user mentions VPN через CDN, XHTTP packet-up, белые списки МТС, обход блокировок через CDN, Yandex Cloud CDN resource, pinning a live edge IP, CDN edge flapping or 20–35% timeouts, 403/405/413/431 at a CDN edge, nginx origin for XHTTP, VLESS share links for Happ/v2RayTun/Hiddify, or asks to plan or review such a deployment — even when no provider is named.
+version: 2.0.0
+description: Build, debug, and audit a VLESS/XHTTP tunnel carried through a CDN edge when the direct path is blocked or throttled — Yandex Cloud CDN is field-verified; Selectel, Gcore, VK, Timeweb, and Beget notes are included. Covers the hardened origin profile: GET/header uplink, X-CDN-Secret origin authentication, nginx keepalive tuning, and native VLESS Encryption (vlessenc). Use when the user mentions VPN через CDN, XHTTP packet-up, белые списки МТС, обход блокировок через CDN, Yandex Cloud CDN resource, pinning a live edge IP, CDN edge flapping or 20–35% timeouts, 403/405/413/431 at a CDN edge, nginx origin for XHTTP, VLESS share links for Happ/v2RayTun/Hiddify, or asks to plan or review such a deployment — even when no provider is named.
 license: MIT
-compatibility: Linux or macOS with bash, curl, dig, python3, and Xray-core on PATH for live tests. Provider console and DNS access are required for setup.
+compatibility: Linux or macOS with bash, curl, dig, python3, and Xray-core on PATH. VLESS Encryption needs Xray-core 25.9.5 or newer. Provider console and DNS access are required for setup.
 ---
 
 # CDN-carried VLESS/XHTTP tunnel
@@ -13,13 +14,15 @@ This skill encodes a field-tested way to keep a VLESS tunnel alive when the dire
 Client (Happ / v2RayTun / Hiddify)
   -> TLS 443, address = pinned edge IP or CDN hostname, SNI = CDN hostname
   -> CDN edge
-  -> origin :80 (plain HTTP in tested setups) nginx
-  -> Xray VLESS/XHTTP inbound on 127.0.0.1
+  -> origin :80 nginx (CDN injects X-CDN-Secret; 444 without it)
+  -> Xray VLESS/XHTTP inbound on 127.0.0.1 (vlessenc payload)
   -> VLESS/REALITY cascade to an exit server
   -> Internet
 ```
 
 The CDN is not a magic bypass. It changes the IP and the network path the client talks to. Whether that path survives a given mobile restriction depends on the carrier, the region, and the restriction window. Only a test on the target SIM during an active restriction proves the whitelist case.
+
+The edge-to-origin leg is public transit, not a private datacenter link. Two independent controls matter there: `X-CDN-Secret` proves that a request came through the configured CDN resource, and `vlessenc` encrypts the VLESS payload so the data placed in HTTP headers is not readable on that leg. The transport shape (path, method, sequence, session id) remains visible.
 
 This repository is a single-skill package. Install or update it with `npx skills add sender-dev/yandex-cdn-xhttp-vpn -g`, or from a clone with `./install.sh`. All paths below are relative to this skill's directory.
 
@@ -34,6 +37,10 @@ These are the expensive lessons. Re-deriving them costs days.
 5. **Disable caching and buffering at every layer.** A stale or transformed response breaks the session. Send `Cache-Control: no-store, no-transform`, disable `proxy_buffering` and `proxy_request_buffering`, and turn caching off on the CDN resource.
 6. **Prove with a control and a real device.** A server-side success does not prove the mobile path works. Use a direct-origin control, a clean vantage point, timestamped series, and finally the actual phone on the actual SIM. Do not claim whitelist success from a datacenter test.
 7. **Secrets stay out of the repository and logs.** UUIDs, private keys, origin IPs, resource IDs, and ticket numbers do not belong in a public repo or a shared transcript. Profiles are written mode `0600` outside the working tree.
+8. **Authenticate the edge to the origin.** Set a static `X-CDN-Secret` request header on the CDN resource and reject the tunnel path without it. This is not user authentication — the UUID still does that — and it does not stop requests that travel through the CDN. It stops direct scans of the origin IP from finding a working XHTTP endpoint.
+9. **Encrypt head-placed payloads.** Header placement is base64, not encryption. Without `vlessenc`, anyone on the edge-to-origin path can read the destination and the data in `X-Data-*`. Generate a key pair with `xray vlessenc`, put the decryption string only on the server and the encryption string only on the client, and verify the wire before claiming the leg is protected. Not every client core supports it; keep a non-encrypted fallback profile where compatibility matters.
+
+Do not put the secret check at server level. A blanket `return 444` breaks `/health`, ACME HTTP-01, and every unrelated vhost. Gate only the tunnel paths, leave liveness and challenge paths open, and add the `/_cdn_secret_probe` control endpoint so the plumbing can be tested without a live tunnel.
 
 ## Provider gate
 
@@ -44,6 +51,7 @@ Run this gate before building. A CDN that fails any hard requirement will waste 
 | Terms permit VPN / dynamic reverse proxy | Provider may block the resource later | Read the current FAQ and ToS; Selectel explicitly does not permit this workload |
 | `GET` is allowed at the edge | XHTTP GET/header fails without it | `cdn-probe.py methods` |
 | Origin can be fetched over HTTP/80 with a Host override | Tested edges fetched origin over plain HTTP into `default_server` | Check the resource settings and the origin access log |
+| The resource can send a static request header to the origin | Needed for `X-CDN-Secret`; without it the origin gate locks every request out | Provider docs and `/_cdn_secret_probe` through the CDN |
 | Cache can be disabled and responses not transformed | Sessions cannot survive cached or rewritten bodies | `cdn-probe.py cache` |
 | The edge fleet actually serves the resource | Some edges return `403`/timeout for a valid resource | `cdn-probe.py matrix` |
 | A certificate exists for the public hostname | TLS SNI must validate on the client | `cdn-probe.py probe` |
@@ -62,21 +70,52 @@ Record the current origin, Xray, nginx, and client profiles. Back up every file 
 
 The origin needs an address reachable from the edge, an nginx entry point, and a local Xray inbound. A certificate is needed only for the optional HTTPS block or for a provider that fetches origin over TLS; the tested Yandex edge fetched origin over **HTTP port 80** even when the panel claimed HTTPS, so keep the port-80 block correct and verify which vhost handled the request.
 
-Use [assets/nginx-origin.conf](assets/nginx-origin.conf) and [assets/xray-inbound.example.json](assets/xray-inbound.example.json). Read [references/origin-setup.md](references/origin-setup.md) for the reasoning behind the buffers and timeouts.
+Generate both secrets outside the repository and store them mode `0600`:
+
+```bash
+install -d -m 700 ~/.config/vpn-cdn
+(umask 077; openssl rand -hex 32 > ~/.config/vpn-cdn/cdn-secret)
+(umask 077; xray vlessenc > ~/.config/vpn-cdn/vlessenc.txt)
+```
+
+`xray vlessenc` prints two authentication options (X25519 and ML-KEM-768). Each option's `decryption` and `encryption` lines are a pair; use one option consistently.
+
+Use [assets/nginx-origin.conf](assets/nginx-origin.conf) and [assets/xray-inbound.example.json](assets/xray-inbound.example.json). In the nginx file, replace `CHANGE_ME_CDN_SECRET` with the generated value. In the inbound, put the **decryption** string from `vlessenc.txt` in `settings.decryption` and leave `encryption` out of the inbound client entries. The client gets the **encryption** string from the same option.
+
+The gate belongs only on tunnel paths. `/health`, `/_cdn_secret_probe`, and `/.well-known/acme-challenge/` stay reachable; `/_cdn_secret_probe` returns `204` with the header and closes the connection without it. A server-level `return 444` is a self-inflicted outage.
+
+Read [references/origin-setup.md](references/origin-setup.md) for the reasoning behind the buffers, keepalive, timeouts, and gate placement.
 
 Validate locally:
 
 ```bash
-bash scripts/origin-check.sh --host cdn.example.com --ip 203.0.113.10 --scheme http --port 80
+bash scripts/origin-check.sh --host cdn.example.com --ip 203.0.113.10 \
+  --scheme http --port 80 --cdn-secret "$(cat ~/.config/vpn-cdn/cdn-secret)"
 sudo nginx -t
 xray run -test -config /usr/local/etc/xray/config.json
 ```
 
-The check covers the health path, a 12 KiB request header (the nginx buffer budget), `Cache-Control`, and method behavior. Add `--scheme https --port 443` to check certificate verification as well.
+The check covers the health path, a 12 KiB request header (the nginx buffer budget), `Cache-Control`, method behavior, and — when `--cdn-secret` is present — door control: rejected without the header, `204` with it. Add `--scheme https --port 443` to check certificate verification as well.
 
 ### 2. Create the CDN resource
 
 Provider steps and console details are in [references/yandex-cdn.md](references/yandex-cdn.md). In short: origin group points at the origin on HTTP/80 with the origin Host header, the resource allows `GET`/`HEAD`/`OPTIONS`, caching is off, the certificate covers the public hostname, and the DNS CNAME points at the target the console shows.
+
+Add the origin gate header to the resource:
+
+```bash
+yc cdn resource update <RESOURCE_ID> \
+  --static-request-headers X-CDN-Secret="$(cat ~/.config/vpn-cdn/cdn-secret)"
+```
+
+Header names may contain letters, digits, `-`, and `_`; values may contain letters, digits, `-`, `_`, `/`, `:`, `=`, `.`, and spaces. A hex secret satisfies both. Read the resource back after the update. Then prove the injection through the CDN before building profiles:
+
+```bash
+bash scripts/origin-check.sh --host cdn.example.com --scheme https --port 443 \
+  --cdn-secret "$(cat ~/.config/vpn-cdn/cdn-secret)"
+```
+
+A `204` on the probe through the CDN hostname means the edge sent the header. If the probe closes without a response, the resource is not sending it; do not proceed with the gate enabled.
 
 Wait for the resource to become active, then wait again. "Active" does not mean every edge is serving it.
 
@@ -97,20 +136,25 @@ A short request that passes proves the edge routes the resource. It does not pro
 # Create the UUID once, outside the repository, and reuse it everywhere.
 install -d -m 700 ~/.config/vpn-cdn
 (umask 077; xray uuid > ~/.config/vpn-cdn/uuid)
+# Optional but recommended when the client core supports it:
+client_key=$(sed -n 's/^"encryption": "\(.*\)"$/\1/p' ~/.config/vpn-cdn/vlessenc.txt | head -1)
 python3 scripts/make-profile.py \
   --address 198.51.100.20 --sni cdn.example.com --path /api-stream \
   --uuid-file ~/.config/vpn-cdn/uuid \
+  --vless-encryption "$client_key" \
   --preset yandex-get --name 'CDN pinned' --out ~/.config/vpn-cdn/pinned.vless
 ```
 
-The generator writes the share URI (`--out`) and, optionally, a matching Xray client config (`--client-config`). Use `--address` = a verified edge IP for the pinned profile, or the CDN hostname for the fallback. Read [references/xhttp-transport.md](references/xhttp-transport.md) before changing any XHTTP key.
+The generator writes the share URI (`--out`) and, optionally, a matching Xray client config (`--client-config`). Use `--address` = a verified edge IP for the pinned profile, or the CDN hostname for the fallback. Omit `--vless-encryption` only if the server inbound still uses `"decryption": "none"`; a client and server with different encryption settings fail at the first packet. Read [references/xhttp-transport.md](references/xhttp-transport.md) before changing any XHTTP key.
 
 ### 5. Test the session end to end
 
 ```bash
 bash scripts/edge-test.sh \
   --edge 198.51.100.20 --sni cdn.example.com --path /api-stream \
-  --uuid-file ~/.config/vpn-cdn/uuid --attempts 5
+  --uuid-file ~/.config/vpn-cdn/uuid \
+  --vless-encryption "$client_key" \
+  --attempts 5
 ```
 
 The script starts a temporary Xray client, sends a series through the edge to a known URL, and reports `LIVE`, `PARTIAL`, or `DEAD`. It cleans up by PID, never with `pkill -f`. Use `--dry-run` to validate the generated config without sending traffic.
@@ -140,6 +184,10 @@ Monitoring, edge rotation, secret rotation, and the incident runbook are in [ref
 | `405` on the uplink | Client uses POST or OPTIONS while the edge allows only GET | Set `uplinkHTTPMethod=GET` |
 | `413` on the uplink | Request body sent where the edge forbids it | Switch to header placement; remove the body |
 | `431` or `400` on large requests | Header chunk or padding too large | Lower `uplinkChunkSize`, raise nginx buffers |
+| Empty reply or `444` through the CDN | The edge did not send `X-CDN-Secret`, or sent the wrong one | Read back `--static-request-headers`; test `/_cdn_secret_probe` through the CDN hostname |
+| Direct origin request returns `444` (expected) | The gate is working; the origin is not meant to be public | Test through the CDN, not by IP |
+| First packet fails right after enabling `vlessenc` | Client and server keys swapped or mismatched; old client core | Server gets `decryption`, client gets `encryption`; both from the same `xray vlessenc` run |
+| Client connects but no payload flows after enabling `vlessenc` | Client core ignores the encryption field instead of rejecting it | Use an Xray-core build 25.9.5+ or keep a `none` fallback profile |
 | TLS reset or EOF right after the handshake | Consumer-source blackholing at the edge | Test from another source; provider support; try a different provider |
 | `malformed HTTP/1.x` plus HTTP/2 SETTINGS bytes | Client forced HTTP/1.1 while ALPN negotiated h2 | Do not force `http/1.1`; leave ALPN at the default |
 | Origin access log shows the request, client receives nothing | Return path broken | Correlate bytes; check edge and upstream; try another edge |
@@ -158,7 +206,19 @@ Verified in the October 2026 field work behind this skill:
 - Xray's HTTP/1.1 XHTTP client can negotiate h2 via ALPN and then write HTTP/1.1 framing, producing a `malformed HTTP/1.x` failure. Do not force h1.
 - Attribution itself is a failure mode: this study initially blamed one provider for edge behavior that was actually served by another. Confirm the CNAME and the console before attributing any edge symptom.
 
+Verified locally on 2026-10-26 against Xray 26.3.27 and nginx 1.26.3:
+
+- `vlessenc` takes a string on both sides. The inbound accepts only `settings.decryption`; adding `encryption` to an inbound client is rejected with `"encryption" should not be in inbound settings`. A full pair generated by `xray vlessenc` produced a working XHTTP session with GET/header and `packet-up` on loopback.
+- With `vlessenc` enabled, a request captured on the CDN-to-origin leg showed the target hostname, URL path, and payload marker in none of the bytes. `X-Data-0` contained ciphertext; the request header block was about 3.1 KiB for a 3–4 KiB chunk.
+- `keepalive_requests` and `keepalive_timeout` are accepted in both `upstream` and `server` contexts. A gate using `map $http_x_cdn_secret` with `return 444` behaves as intended: no header closes the connection, the right header passes, `/health` and ACME stay open.
+- nginx joins duplicate request headers with `", "`. A strict equality check would fail when a client prepends its own `X-CDN-Secret` through the CDN; a regex `map` that matches the secret anywhere in the value passes, and a direct scan still cannot guess it.
+- Yandex Cloud CDN documents static request headers (`--static-request-headers`, API `staticRequestHeaders`) with header-name characters limited to letters, digits, `-`, and `_`.
+
 Not verified, and must not be presented as working:
+
+- That a Yandex edge actually injects `X-CDN-Secret` for a live resource. The control-plane feature is documented; the edge behavior was not exercised in this study. Prove it with `/_cdn_secret_probe` through the CDN before enforcing the gate.
+- `vlessenc` end to end through a Yandex edge, and support in every mobile client. Happ and v2RayTun bundle Xray-core and may work; sing-box-based clients such as Hiddify may not implement VLESS Encryption. Keep a `none` fallback profile until the target device is tested.
+- `keepalive_requests 100000` under a long production soak. The directive is valid and the local test passed; the value is a tuning choice, not a measured optimum.
 
 - Yandex WebSocket: the edge did not pass an `Upgrade` in this study (0/20), and the provider enables the feature only through a support request. Not accepted as a working transport.
 - VK: current VK Cloud CDN terms prohibit proxy/VPN use and traffic masking, so it fails the provider gate. Timeweb and Beget: provider notes only; this repository ships no tested preset, and this field study did not validate them.
@@ -168,9 +228,9 @@ Not verified, and must not be presented as working:
 
 Read only what the task needs.
 
-- [references/yandex-cdn.md](references/yandex-cdn.md) — Yandex Cloud CDN resource, methods, certificate, CNAME, edge behavior, support path.
-- [references/origin-setup.md](references/origin-setup.md) — nginx port 80/443 blocks, buffers, Xray inbound, health checks, logging.
-- [references/xhttp-transport.md](references/xhttp-transport.md) — XHTTP modes, header budget, the full `extra` object, share-link fields, client/server matching.
+- [references/yandex-cdn.md](references/yandex-cdn.md) — Yandex Cloud CDN resource, methods, certificate, CNAME, static request headers, edge behavior, support path.
+- [references/origin-setup.md](references/origin-setup.md) — hardened nginx port 80/443 blocks, secret gate, buffers, keepalive, Xray inbound with `vlessenc`, logging.
+- [references/xhttp-transport.md](references/xhttp-transport.md) — XHTTP modes, header budget, `vlessenc` key placement, the full `extra` object, share-link fields, client/server matching.
 - [references/diagnostics.md](references/diagnostics.md) — test ladder, vantage contamination, log correlation, interpretation rules.
 - [references/providers.md](references/providers.md) — Yandex, Selectel, Gcore, VK, Timeweb, Beget comparison and provider gate.
 - [references/operations.md](references/operations.md) — backups, secrets, rotation, monitoring, incident runbook, acceptance checklist.

@@ -7,6 +7,7 @@ This is the provider that passed the field test. The notes describe the resource
 - **Origin group**: one origin, the server that terminates XHTTP.
 - **Origin protocol**: HTTP, port 80. The tested resource fetched origin over plain HTTP even when the panel reported HTTPS. Keep the port-80 nginx block correct.
 - **Origin Host header**: the public CDN hostname (for example `cdn.example.com`). This is what makes nginx match the intended server block.
+- **Static request headers**: the resource can add headers to every origin request. Use one for the gate: `X-CDN-Secret=<hex secret>`. In the CLI, `yc cdn resource update <RESOURCE_ID> --static-request-headers X-CDN-Secret=<secret>`; the API field is `staticRequestHeaders`. Header names may contain letters, digits, `-`, and `_`; values may contain letters, digits, `-`, `_`, `/`, `:`, `=`, `.`, and spaces. Read the resource back after the update and prove the injection with the origin `/_cdn_secret_probe` endpoint before enforcing the gate.
 - **Public hostname**: the name the client uses for SNI and Host. The CNAME target is shown by the console; do not infer the provider from the suffix alone.
 - **Allowed methods**: `GET`, `HEAD`, `OPTIONS` in the tested resource. A POST body returned `413` through the tested edge; a reference deployment reports `405` on POST. Add methods through the resource's HTTP method settings, and always send the full list when updating: an API PATCH replaces the whole list rather than merging it.
 - **Caching**: off. Large-file segmentation: off. Compression/transformation: off. A cached or rewritten response breaks the tunnel.
@@ -16,10 +17,10 @@ This is the provider that passed the field test. The notes describe the resource
 ## Provisioning order
 
 1. Create the origin group and origin. Use the origin's domain, not a bare IP, if the certificate and Host matching depend on it.
-2. Create the CDN resource. Attach the origin group, set the public hostname, HTTP origin, Host header, methods, cache off, and the certificate.
+2. Create the CDN resource. Attach the origin group, set the public hostname, HTTP origin, Host header, methods, cache off, and the certificate. Add the `X-CDN-Secret` static request header if the origin gate is enabled.
 3. Create the CNAME at the DNS host. Wait for authoritative nameservers to return it.
 4. Wait for the resource to become active, then wait for propagation. Activation is a control-plane state; edge fleets roll out separately.
-5. Run `cdn-probe.py dns` and `cdn-probe.py matrix`. Do not trust a single successful request.
+5. Run `cdn-probe.py dns` and `cdn-probe.py matrix`. Do not trust a single successful request. Then run `origin-check.sh --cdn-secret` without `--ip` to prove the edge sends the header.
 6. Build the client profile only after at least one edge passes a short probe and an XHTTP session test.
 
 ## Edge behavior observed
@@ -36,6 +37,7 @@ This is the provider that passed the field test. The notes describe the resource
 
 - Resource status and the last configuration change.
 - Origin protocol, port, and Host header.
+- Static request headers, read back after every change. The console and API may show an empty map if the update did not apply.
 - Allowed HTTP methods, read back after every change.
 - Cache settings, query-string handling, and compression.
 - Certificate name, SANs, and expiry.
@@ -62,3 +64,7 @@ Keep credentials, UUIDs, and private keys out of the ticket.
 - Declaring success after the resource turns active. Edges roll out later.
 - Assuming HTTPS-to-origin. Verify the protocol in the access log; the tested edge used HTTP/80.
 - Leaving a domain profile as the only profile. It includes dead edges by design.
+- Enabling the origin gate before the resource sends `X-CDN-Secret`. Every request then dies with an empty reply. Add the header first, prove it with `/_cdn_secret_probe`, then enforce.
+- Treating `X-CDN-Secret` as user authentication. It only proves the request came through the CDN; the UUID authenticates the user.
+- Expecting the secret to protect requests that travel through the CDN. By design, the CDN adds it to those requests.
+- Forgetting that the probe response can be cached. Keep caching off on the resource, or the `204` may come from a cache instead of the origin.

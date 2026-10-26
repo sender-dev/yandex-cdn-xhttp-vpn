@@ -52,7 +52,20 @@ python3 scripts/cdn-probe.py probe --host cdn.example.com --ip 198.51.100.20 --p
 
 Checks SNI, certificate validity, expiry, protocol, status, and latency. A certificate error through the edge but not directly at the origin means the edge is serving a fallback or has not attached the certificate. A connection reset right after the handshake is an edge policy symptom, not a certificate symptom.
 
-### 3. Short request per edge
+### 3. Secret gate through the edge
+
+Only meaningful when the origin has the `X-CDN-Secret` gate. Run this before blaming the tunnel:
+
+```bash
+bash scripts/origin-check.sh --host cdn.example.com --scheme https --port 443 \
+  --cdn-secret "$CDN_SECRET"
+```
+
+Through the CDN the probe `/_cdn_secret_probe` must return `204`. Directly at the origin, the same probe without the header must return `000` or `444`, and with the header `204`. A `204` through the edge proves the edge injects the header and reaches the origin; a failure here will make every session attempt look like a dead edge.
+
+Evaluate this together with DNS and TLS: a probe that passes but sessions fail moves the question to XHTTP framing or client keys, not to the edge chain.
+
+### 4. Short request per edge
 
 ```bash
 python3 scripts/cdn-probe.py matrix --host cdn.example.com --path /api-stream --attempts 3
@@ -60,7 +73,7 @@ python3 scripts/cdn-probe.py matrix --host cdn.example.com --path /api-stream --
 
 `OK` means the edge routed the request; `BLOCKED` means the edge or its method policy rejected it (`403`/`405`/`413`/`501`); `ERROR` means the edge answered 5xx; `FAIL` means no HTTP answer. A short routed request does not prove the edge carries a long-lived XHTTP session.
 
-### 4. Method and cache behavior
+### 5. Method and cache behavior
 
 ```bash
 python3 scripts/cdn-probe.py methods --host cdn.example.com --path /api-stream
@@ -69,18 +82,21 @@ python3 scripts/cdn-probe.py cache   --host cdn.example.com --path /api-stream
 
 Methods should show GET allowed. A `413` on a POST body was measured through the tested public host; a reference deployment also reports `405` on POST at a Yandex edge. Cache should show no `HIT` and no `Age` growth on a unique URL.
 
-### 5. XHTTP session per edge
+### 6. XHTTP session per edge
 
 ```bash
 # ~/.config/vpn-cdn/uuid is created once, mode 0600 (see SKILL.md step 4).
 bash scripts/edge-test.sh \
   --edge 198.51.100.20 --sni cdn.example.com --path /api-stream \
-  --uuid-file ~/.config/vpn-cdn/uuid --attempts 5
+  --uuid-file ~/.config/vpn-cdn/uuid --attempts 5 \
+  --vless-encryption "$VLESS_ENCRYPTION"
 ```
+
+Pass `--vless-encryption` only when the inbound uses `decryption`; a mismatched key looks like a session that establishes and then dies, not like an edge problem.
 
 This is the discriminating test. Short probes pass and sessions fail means the edge does not carry the long-lived flow. Sessions pass on one edge and fail on another means the fleet is uneven.
 
-### 6. Origin correlation
+### 7. Origin correlation
 
 On the origin, during the test window:
 
@@ -97,7 +113,7 @@ For each attempt, look for a line with the same path, method, and timestamp. The
 
 For XHTTP sessions, a healthy flow shows repeated requests, not one. A session that handshakes and then sends nothing usually shows a `200` with a small request and no follow-up data.
 
-### 7. Real device
+### 8. Real device
 
 On the phone, with Wi-Fi off:
 
@@ -116,6 +132,9 @@ On the phone, with Wi-Fi off:
 | Short probes fail on one IP, pass on another | That edge is not serving the resource |
 | All short probes pass, sessions 0/20 | Edge does not carry this flow, or the profile is mismatched |
 | Sessions pass from datacenter, fail from consumer | Source-based edge policy |
+| Probe `204` through the edge, sessions fail | Edge chain and secret are fine; look at XHTTP framing, method, or client key |
+| Probe `204` fails through the edge, direct probe with header passes | The edge is not injecting `X-CDN-Secret`, or the header was overwritten |
+| Sessions fail, origin log shows `444` | The secret gate is closing the connection; check the CDN static header before the tunnel |
 | Sessions pass from the server, phone fails, origin log shows phone requests | Phone-to-edge leg works; return path or app routing is the issue |
 | All attempts fail before the origin log | Profile, SNI, Host, path, or edge routing |
 
@@ -124,6 +143,9 @@ On the phone, with Wi-Fi off:
 - `101 Switching Protocols` at the origin followed by zero application bytes: the upgrade succeeded, data did not flow. Check the return path and source policy.
 - `403` at the edge with no origin line: edge-side filtering, method, Host, or inactive resource.
 - `405`: method not allowed. The client is sending POST or OPTIONS where GET is required.
+- `444` at the origin, or an empty reply through the edge: the secret gate rejected the request. The edge did not inject `X-CDN-Secret` or the value does not match.
+- `204` on `/_cdn_secret_probe` but sessions fail: the chain and gate are healthy; debug framing and keys, not the CDN.
+- Session establishes then dies with no origin error and a fresh `vlessenc` key: client and server keys are from different pairs, or the client core is too old.
 - `413`: a request body was sent to an edge that forbids it.
 - `431`/`400` on large requests: header budget exceeded.
 - `malformed HTTP/1.x` plus HTTP/2 SETTINGS bytes: ALPN mismatch; do not force HTTP/1.1.

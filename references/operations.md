@@ -28,9 +28,10 @@ Rules:
 What is sensitive:
 
 - VLESS UUIDs and any REALITY private keys.
+- The `X-CDN-Secret` value and the VLESS Encryption key pair. The secret gates the origin; the key decrypts the tunnel.
 - Origin IPs and SSH credentials.
 - CDN resource IDs, API tokens, and support ticket contents.
-- QR codes and `.vless` files; they contain the UUID.
+- QR codes and `.vless` files; they contain the UUID and, with `vlessenc`, the client key.
 
 Handling:
 
@@ -42,6 +43,28 @@ Handling:
 - Keep a per-device profile so one device can be revoked without touching the others.
 
 The repository's `.gitignore` excludes profile artifacts, but do not rely on it as a safety net. Check `git diff --cached` before every commit. `tests/secret-scan.sh` checks for private keys, tokens, and non-placeholder UUIDs; set `SECRET_SCAN_DENYLIST` to a file outside the repository (one extended regex per line) to catch your own hostnames, IPs, resource IDs, and ticket numbers.
+
+## Rotating the secret gate
+
+The CDN injects `X-CDN-Secret`; the origin accepts only a matching value. Rotate without a gap:
+
+1. Put both the old and the new value in the nginx `map` regex, for example `"~(old|new)value"`.
+2. Update the CDN resource with the new value: `yc cdn resource update <ID> --static-request-headers X-CDN-Secret=<new>`, sending the complete header set.
+3. Verify through the CDN that `/_cdn_secret_probe` still returns `204`.
+4. Remove the old value from the `map`, reload nginx, and verify again.
+5. Update the runbook and store the new value outside the repository.
+
+Skipping step 1 turns the rotation into an outage. The CDN may take time to roll the new header to every edge; step 3 is the gate for step 4.
+
+## Rotating VLESS Encryption
+
+1. Generate pairs with `xray vlessenc`. It prints two authentication options, X25519 and ML-KEM-768; the `decryption` and `encryption` lines inside one option form a pair. Use one option consistently on both sides.
+2. Install the new `decryption` in the inbound, keeping the old inbound running until clients move. A new `decryption` string is not additive, so plan a window.
+3. For a zero-gap rotation, keep a second inbound on a spare port with the new key, move clients, then remove the old inbound.
+4. Update every profile with the new `encryption` key, validate with `xray run -test`, and restart the client.
+5. Confirm an end-to-end session and watch for `tls`/handshake errors on clients that still hold the old key.
+
+An old client key fails immediately after the server switches. There is no fallback inside `vlessenc`; the fallback is a separate `none` profile.
 
 ## Change procedure
 
@@ -61,10 +84,13 @@ Track these on the origin and the CDN:
 | Signal | Why | Where |
 |---|---|---|
 | Requests to the tunnel path | Is the edge routing at all | nginx access log |
+| `444` on the tunnel path | The edge stopped injecting the secret, or a scan hit the origin | nginx access log |
+| `204` on `/_cdn_secret_probe` | The full CDN→origin chain and the secret still work | `origin-check.sh --cdn-secret` |
 | 2xx / 4xx / 5xx ratio | Method, Host, or edge policy changes | nginx and CDN metrics |
 | `$request_length` and `$bytes_sent` | Is data flowing in both directions | nginx log format |
 | Sessions with `101` and zero bytes | Upgrade succeeded, data path failed | nginx log |
 | Reconnect rate per device | Client is fighting a stall | Client logs and origin log |
+| Client handshake errors after a key change | Wrong or stale `vlessenc` key | Client log and Xray log |
 | Per-edge success rate | Which edges are healthy | `cdn-probe.py matrix` and `edge-test.sh` |
 | Certificate expiry | TLS failure after a silent expiry | `cdn-probe.py probe` |
 | DNS answer set | Edge rotation and dead edges | `cdn-probe.py dns` |
@@ -74,6 +100,8 @@ A useful daily check:
 ```bash
 python3 scripts/cdn-probe.py dns --host cdn.example.com
 python3 scripts/cdn-probe.py matrix --host cdn.example.com --path /api-stream --attempts 3
+bash scripts/origin-check.sh --host cdn.example.com --scheme https --port 443 \
+  --cdn-secret "$CDN_SECRET"
 ```
 
 A weekly session check on the pinned edge and the domain fallback catches gradual fleet drift.
@@ -112,6 +140,23 @@ A weekly session check on the pinned edge and the domain fallback catches gradua
 4. Compare an identical manual request through the same edge.
 5. If manual requests pass and tunnel requests fail, the edge is filtering the pattern; escalate or change provider.
 
+### Instant 444 or empty replies
+
+`444` is the origin gate closing the connection, not the CDN. Empty replies through the CDN often mean the same thing after the edge hides the status.
+
+1. Check the secret on the origin and in the CDN resource; a partial `yc cdn resource update` can drop `staticRequestHeaders`.
+2. Request `/_cdn_secret_probe` through the CDN with `origin-check.sh --cdn-secret`. A `204` means the chain and secret are intact; no response, or a non-`204`, means the edge is not injecting the header.
+3. Confirm the probe and tunnel paths are covered by the `map` and that no server-level `return 444` was added. Health and ACME must stay reachable.
+4. Reproduce directly at the origin with the correct header. Direct-with-header should be `204`; direct-without-header must be `000` or `444`.
+5. If a CDN header change is recent, wait for edge rollout, then re-run the probe before touching nginx.
+
+### Clients fail after enabling vlessenc
+
+1. Confirm the client profile carries the client key from the same `xray vlessenc` run as the inbound `decryption`.
+2. Validate the inbound: its clients must not have an `encryption` field.
+3. Check the client core version; Xray-core older than 25.9.5 may ignore the field and hang.
+4. If the client is sing-box based and does not support it, use the `none`/`none` fallback profile rather than downgrading the server.
+
 ### TLS errors
 
 1. Check the certificate SAN and expiry through the edge and directly at the origin.
@@ -130,15 +175,19 @@ A weekly session check on the pinned edge and the domain fallback catches gradua
 A deployment is accepted only when all of these are true:
 
 - [ ] Direct origin/cascade control passes 10/10.
+- [ ] Direct origin without `X-CDN-Secret` returns `000` or `444`; with the header, the probe returns `204`.
+- [ ] `/_cdn_secret_probe` through the CDN returns `204`.
+- [ ] If `vlessenc` is enabled, the inbound has only `decryption`, the client only `encryption`, and a loopback or direct session passes.
 - [ ] At least one edge passes 5/5 XHTTP sessions.
 - [ ] The pinned profile passes 20/20 connect/health attempts from the target network.
 - [ ] The target app sends and receives data through the tunnel.
+- [ ] The target app version accepts the profile; if `vlessenc` is used, confirm the client core supports it.
 - [ ] The test ran on the target SIM, with Wi-Fi off.
 - [ ] If the claim is whitelist mode, the test ran during an active restriction window.
 - [ ] Failures are correlated with origin logs; no failure is left as an unexplained timeout.
 - [ ] The fallback profile still works.
 - [ ] The profile is stored mode `0600` outside the repository.
-- [ ] No UUID, key, origin IP, or resource ID appears in notes, tickets, or commits.
+- [ ] No UUID, key, origin IP, resource ID, or `X-CDN-Secret` value appears in notes, tickets, or commits.
 
 If restrictions were not active, label the result "ordinary mobile connectivity", not "whitelist success".
 

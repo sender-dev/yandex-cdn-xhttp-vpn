@@ -51,7 +51,55 @@ Recommended values:
 }
 ```
 
-`scMaxEachPostBytes` is an upper bound in bytes; keep it at or below the chunk range plus overhead. `scMinPostsIntervalMs` prevents a tight request loop; 10 ms is a reasonable floor on a CDN path.
+`scMaxEachPostBytes` is an upper bound for POST-mode chunks, not for GET/header uplink. With `uplinkHTTPMethod: GET` and `uplinkDataPlacement: header` it does not shape the request, but keep it consistent on both sides. `scMinPostsIntervalMs` prevents a tight POST loop and is irrelevant to GET/header as well; 10 ms is a reasonable floor if a POST mode is used. The proposal to set `scMaxEachPostBytes` to 500000–1000000 belongs to body/POST modes and contradicts a header budget.
+
+Measured on loopback with Xray 26.3.27, `uplinkChunkSize: "3000-4000"`, and `xPaddingBytes: "100-1000"`: the complete request header block was 3152 bytes, including `X-Data-0`, session, sequence, padding, and browser-like headers. That is the practical number to compare against an edge limit.
+
+## Encrypting the payload (vlessenc)
+
+Header placement base64-encodes the VLESS payload. Base64 is not encryption: without `vlessenc`, an observer on the edge-to-origin leg can decode the destination and the data. VLESS Encryption adds an authenticated record layer inside VLESS, so the bytes placed in `X-Data-*` are ciphertext before XHTTP frames them.
+
+Generate one pair on the origin:
+
+```bash
+xray vlessenc > ~/.config/vpn-cdn/vlessenc.txt
+```
+
+The output contains two authentication options (X25519 and ML-KEM-768) and four strings. Each option is a valid pair; pick one option and keep its two lines together. To take the first option:
+
+```bash
+SERVER_KEY=$(sed -n 's/^"decryption": "\(.*\)"$/\1/p' ~/.config/vpn-cdn/vlessenc.txt | head -1)
+CLIENT_KEY=$(sed -n 's/^"encryption": "\(.*\)"$/\1/p' ~/.config/vpn-cdn/vlessenc.txt | head -1)
+```
+
+```json
+"decryption": "mlkem768x25519plus.native.600s.<server-key>"
+"encryption": "mlkem768x25519plus.native.0rtt.<client-key>"
+```
+
+Server: only `settings.decryption`. Client: only `users[].encryption`. Do not put `encryption` on an inbound client:
+
+```json
+"settings": {
+  "clients": [{ "id": "<UUID>", "flow": "" }],
+  "decryption": "<server-key-string>"
+}
+```
+
+```json
+"users": [{ "id": "<UUID>", "encryption": "<client-key-string>" }]
+```
+
+Rules that prevent most failures:
+
+- The two strings must come from the same option in the same run. Mixing `decryption` from one option with `encryption` from another, or from a second run, fails to decrypt.
+- VLESS Encryption needs Xray-core 25.9.5 or newer. Older clients may ignore the field instead of failing at parse time, which looks like a stalled session.
+- Support is not universal. Happ and v2RayTun bundle Xray-core and may support it; sing-box-based clients such as Hiddify may not. Keep a matching `none`/`none` fallback profile during rollout.
+- The transport metadata stays visible: path, method, `X-Auth-Token`, `page`, and `X-Data` header names. Encryption hides the payload, not the shape.
+- Encrypt the 443 origin block too if it carries the tunnel; otherwise the plaintext path remains available.
+- Rotate by generating a new pair, updating server and client profiles together, then restarting Xray. The old client key stops working immediately.
+
+Local proof, not a field claim: with `vlessenc` enabled, a captured CDN-to-origin request contained no target hostname, URL path, or payload marker; `X-Data-0` was ciphertext. End-to-end behavior through a Yandex edge and support in the target mobile client still need a device test.
 
 ## The full extra object
 
@@ -111,6 +159,14 @@ A VLESS share link for Happ, v2RayTun, or Hiddify:
 vless://<UUID>@<ADDRESS>:443?encryption=none&security=tls&sni=<CDN_HOST>&fp=chrome&type=xhttp&host=<CDN_HOST>&path=%2Fapi-stream&mode=packet-up&extra=<URL-ENCODED-JSON>#<LABEL>
 ```
 
+With `vlessenc`, `encryption` carries the client key instead of `none`:
+
+```text
+vless://<UUID>@<ADDRESS>:443?encryption=mlkem768x25519plus.native.600s.<CLIENT_KEY>&security=tls&sni=<CDN_HOST>&fp=chrome&type=xhttp&host=<CDN_HOST>&path=%2Fapi-stream&mode=packet-up&extra=<URL-ENCODED-JSON>#<LABEL>
+```
+
+`scripts/make-profile.py --vless-encryption "$CLIENT_KEY"` writes exactly this. The key is sensitive: it decrypts the tunnel, so keep it out of the share link you paste into chats, tickets, or public repos.
+
 Field meanings:
 
 | Field | Value |
@@ -122,6 +178,7 @@ Field meanings:
 | `host` | The HTTP Host header; usually the same as SNI |
 | `path` | The tunnel path, URL-encoded (`/api-stream` becomes `%2Fapi-stream`) |
 | `mode` | `packet-up` |
+| `encryption` | `none`, or the client key from `xray vlessenc` when the inbound uses `decryption` |
 | `extra` | One URL-encoded JSON object containing the XHTTP settings, at the top level |
 | `fp` | `chrome` is the tested fingerprint |
 
@@ -140,7 +197,7 @@ The equivalent outbound:
     "vnext": [{
       "address": "198.51.100.20",
       "port": 443,
-      "users": [{ "id": "<UUID>", "encryption": "none" }]
+      "users": [{ "id": "<UUID>", "encryption": "<CLIENT_KEY>" }]
     }]
   },
   "streamSettings": {
@@ -180,6 +237,8 @@ The equivalent outbound:
   }
 }
 ```
+
+`users[].encryption` is the client half of `vlessenc`; set it to the key from `xray vlessenc` or leave it as `none` when the inbound has no `decryption`. The inbound side has no `encryption` field at all.
 
 `xmux` keeps a small pool of reusable connections. Do not set both `maxConcurrency` and `maxConnections` to positive values: `xray run -test` may accept the pair, but the connection fails when it is used. The Yandex preset uses connections, not concurrency.
 
