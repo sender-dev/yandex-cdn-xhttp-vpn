@@ -107,6 +107,43 @@ class ClientConfigTests(unittest.TestCase):
         self.assertIn("@[2001:db8::1]:443", uri)
 
 
+class EncryptionTests(unittest.TestCase):
+    KEY = "mlkem768x25519plus.native.0rtt.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+    def test_uri_carries_encryption_key(self):
+        uri = make_profile.build_uri(
+            ADDRESS, SNI, SNI, PATH, 443, UUID, "enc", make_profile.preset("yandex-get"),
+            self.KEY,
+        )
+        query = parse_qs(urlsplit(uri).query)
+        self.assertEqual(query["encryption"][0], self.KEY)
+
+    def test_default_encryption_is_none(self):
+        uri = make_profile.build_uri(
+            ADDRESS, SNI, SNI, PATH, 443, UUID, "plain", make_profile.preset("yandex-get")
+        )
+        self.assertEqual(parse_qs(urlsplit(uri).query)["encryption"][0], "none")
+
+    def test_client_config_carries_encryption_key(self):
+        config = make_profile.build_client_config(
+            ADDRESS, SNI, SNI, PATH, 443, UUID, make_profile.preset("yandex-get"), 11096,
+            self.KEY,
+        )
+        user = config["outbounds"][0]["settings"]["vnext"][0]["users"][0]
+        self.assertEqual(user["encryption"], self.KEY)
+
+    def test_validator_accepts_none_and_keys(self):
+        self.assertEqual(make_profile.validate_vless_encryption("none"), "none")
+        self.assertEqual(make_profile.validate_vless_encryption(""), "none")
+        self.assertEqual(make_profile.validate_vless_encryption(self.KEY), self.KEY)
+
+    def test_validator_rejects_bad_keys(self):
+        for value in ("aes-128-gcm", "mlkem768x25519plus", "mlkem768x25519plus.native", "x " + self.KEY):
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    make_profile.validate_vless_encryption(value)
+
+
 class CliTests(unittest.TestCase):
     def test_writes_private_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -153,6 +190,45 @@ class CliTests(unittest.TestCase):
         output = buffer.getvalue()
         self.assertNotIn(UUID, output)
         self.assertEqual(json.loads(output)["sni"], SNI)
+
+    def test_writes_encryption_to_uri_and_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            uri_path = Path(directory) / "encrypted.vless"
+            config_path = Path(directory) / "encrypted.json"
+            code = make_profile.main(
+                [
+                    "--uuid", UUID,
+                    "--address", ADDRESS,
+                    "--sni", SNI,
+                    "--vless-encryption", EncryptionTests.KEY,
+                    "--out", str(uri_path),
+                    "--client-config", str(config_path),
+                    "--quiet",
+                ]
+            )
+            self.assertEqual(code, 0)
+            query = parse_qs(urlsplit(uri_path.read_text()).query)
+            self.assertEqual(query["encryption"][0], EncryptionTests.KEY)
+            config = json.loads(config_path.read_text())
+            user = config["outbounds"][0]["settings"]["vnext"][0]["users"][0]
+            self.assertEqual(user["encryption"], EncryptionTests.KEY)
+
+    def test_json_summary_does_not_leak_encryption_key(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            make_profile.main(
+                [
+                    "--uuid", UUID,
+                    "--address", ADDRESS,
+                    "--sni", SNI,
+                    "--vless-encryption", EncryptionTests.KEY,
+                    "--json",
+                    "--quiet",
+                ]
+            )
+        output = buffer.getvalue()
+        self.assertNotIn(EncryptionTests.KEY, output)
+        self.assertTrue(json.loads(output)["vless_encryption_enabled"])
 
     def test_rejects_bad_uuid(self):
         with contextlib.redirect_stderr(io.StringIO()):

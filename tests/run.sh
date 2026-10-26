@@ -32,14 +32,50 @@ if command -v xray >/dev/null 2>&1; then
     keypair=$(xray x25519)
     private_key=$(printf '%s\n' "$keypair" | sed -n 's/^PrivateKey: //p')
     public_key=$(printf '%s\n' "$keypair" | sed -n 's/^Password (PublicKey): //p')
-    python3 - "$tmp/inbound.json" "$private_key" "$public_key" <<'PY'
+
+    vlessenc=$(xray vlessenc)
+    decryption_key=$(printf '%s\n' "$vlessenc" | sed -n 's/^"decryption": "\(.*\)"$/\1/p' | head -1)
+    encryption_key=$(printf '%s\n' "$vlessenc" | sed -n 's/^"encryption": "\(.*\)"$/\1/p' | head -1)
+    test -n "$decryption_key"
+    test -n "$encryption_key"
+
+    python3 scripts/make-profile.py \
+        --uuid 00000000-0000-4000-8000-000000000000 \
+        --address 198.51.100.20 \
+        --sni cdn.example.com \
+        --path /api-stream \
+        --vless-encryption "$encryption_key" \
+        --client-config "$tmp/client-encrypted.json" \
+        --out "$tmp/encrypted.vless" \
+        --quiet
+    xray run -test -config "$tmp/client-encrypted.json" >/dev/null
+    python3 - "$tmp/client-encrypted.json" "$tmp/encrypted.vless" "$encryption_key" <<'PY'
+import json
+import sys
+from urllib.parse import parse_qs, urlsplit
+
+path, uri_path, key = sys.argv[1:4]
+with open(path, encoding="utf-8") as stream:
+    config = json.load(stream)
+user = config["outbounds"][0]["settings"]["vnext"][0]["users"][0]
+assert user["encryption"] == key, user
+query = parse_qs(urlsplit(open(uri_path, encoding="utf-8").read()).query)
+assert query["encryption"][0] == key, query
+PY
+
+    python3 - "$tmp/inbound.json" "$private_key" "$public_key" "$decryption_key" <<'PY'
 import json
 import sys
 
-path, private, public = sys.argv[1:4]
+path, private, public, decryption = sys.argv[1:5]
 with open("assets/xray-inbound.example.json", encoding="utf-8") as stream:
     data = json.load(stream)
 for inbound in data["inbounds"]:
+    settings = inbound.get("settings", {})
+    if settings.get("decryption") == "<VLESS_DECRYPTION_KEY>":
+        settings["decryption"] = decryption
+        for client in settings.get("clients", []):
+            client.pop("encryption", None)
     reality = inbound.get("streamSettings", {}).get("realitySettings")
     if reality and reality.get("privateKey") == "<REALITY_PRIVATE_KEY>":
         reality["privateKey"] = private
@@ -68,10 +104,19 @@ assert settings["sessionPlacement"] == "header", settings
 assert settings["sessionKey"] == "X-Auth-Token", settings
 assert "sessionIDPlacement" not in settings, settings
 assert "enableXmux" not in settings, settings
+assert dump["inbounds"][0]["settings"]["decryption"].startswith(
+    "mlkem768x25519plus."
+), dump["inbounds"][0]["settings"]
 PY
-    echo "xray config: ok (client + inbound example)"
+    echo "xray config: ok (client + vlessenc + inbound example)"
 else
     echo "xray config: skipped (xray not on PATH)"
+fi
+
+if command -v docker >/dev/null 2>&1 || command -v nginx >/dev/null 2>&1; then
+    bash tests/nginx-check.sh
+else
+    echo "nginx check: skipped (neither docker nor nginx is available)"
 fi
 
 echo "ALL_CHECKS_OK"
