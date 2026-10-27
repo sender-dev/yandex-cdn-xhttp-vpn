@@ -172,6 +172,55 @@ class CliTests(unittest.TestCase):
             self.assertTrue(uri_path.read_text().startswith("vless://"))
             json.loads(config_path.read_text())
 
+    def test_chunk_size_override_is_numeric(self):
+        with tempfile.TemporaryDirectory() as directory:
+            uri_path = Path(directory) / "pinned.vless"
+            config_path = Path(directory) / "pinned.json"
+            code = make_profile.main(
+                [
+                    "--uuid",
+                    UUID,
+                    "--address",
+                    ADDRESS,
+                    "--sni",
+                    SNI,
+                    "--path",
+                    PATH,
+                    "--chunk-size",
+                    "4000",
+                    "--out",
+                    str(uri_path),
+                    "--client-config",
+                    str(config_path),
+                    "--quiet",
+                ]
+            )
+            self.assertEqual(code, 0)
+            query = parse_qs(urlsplit(uri_path.read_text().strip()).query)
+            extra = json.loads(query["extra"][0])
+            self.assertEqual(extra["uplinkChunkSize"], 4000)
+            config = json.loads(config_path.read_text())
+            settings = config["outbounds"][0]["streamSettings"]["xhttpSettings"]
+            self.assertEqual(settings["uplinkChunkSize"], 4000)
+
+    def test_chunk_size_rejects_bad_values(self):
+        for value in ("0", "999999", "4000-3000", "abc"):
+            with self.assertRaises(SystemExit):
+                make_profile.main(
+                    [
+                        "--uuid",
+                        UUID,
+                        "--address",
+                        ADDRESS,
+                        "--sni",
+                        SNI,
+                        "--chunk-size",
+                        value,
+                        "--out",
+                        "-",
+                    ]
+                )
+
     def test_json_summary_does_not_leak_uuid(self):
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):

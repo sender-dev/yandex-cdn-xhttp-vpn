@@ -117,6 +117,22 @@ def validate_path(value):
     return value
 
 
+def validate_chunk_size(value):
+    value = str(value or "").strip()
+    if re.fullmatch(r"[0-9]+", value):
+        size = int(value)
+        if not 64 <= size <= 65536:
+            fail("--chunk-size must be between 64 and 65536 bytes")
+        return size
+    match = re.fullmatch(r"([0-9]+)-([0-9]+)", value)
+    if not match:
+        fail("--chunk-size must be an integer or a MIN-MAX range")
+    low, high = int(match.group(1)), int(match.group(2))
+    if not 64 <= low <= high <= 65536:
+        fail("--chunk-size range is invalid")
+    return value
+
+
 def read_uuid(args):
     if args.uuid:
         return validate_uuid(args.uuid)
@@ -255,6 +271,12 @@ def parse_args(argv=None):
     parser.add_argument("--uuid-file")
     parser.add_argument("--preset", default="yandex-get", choices=sorted(PRESETS))
     parser.add_argument(
+        "--chunk-size",
+        help="override uplinkChunkSize: an integer (e.g. 4000) or a range "
+        "string (e.g. 3000-4000). Integer is required by older client cores "
+        "that decode the field as uint32",
+    )
+    parser.add_argument(
         "--vless-encryption",
         help="client key from `xray vlessenc` (mlkem768x25519plus...); "
         "`none` keeps classic VLESS. Also read from VLESS_ENCRYPTION",
@@ -285,6 +307,8 @@ def main(argv=None):
         args.vless_encryption or os.environ.get("VLESS_ENCRYPTION", "")
     )
     xhttp = preset(args.preset)
+    if args.chunk_size:
+        xhttp["uplinkChunkSize"] = validate_chunk_size(args.chunk_size)
     uri = build_uri(
         address, sni, host, path, args.port, uuid, args.name, xhttp, vless_encryption
     )
