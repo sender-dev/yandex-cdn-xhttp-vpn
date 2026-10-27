@@ -187,7 +187,7 @@ Include every hostname the origin answers for in `server_name`, and expand the c
 
 ## Xray inbound
 
-The tested inbound is VLESS with XHTTP, bound to loopback, routing to a REALITY cascade. The full example is in [../assets/xray-inbound.example.json](../assets/xray-inbound.example.json). The essential shape:
+The cascade inbound is VLESS with XHTTP, bound to loopback, routing to REALITY; its full example is [../assets/xray-inbound-cascade.example.json](../assets/xray-inbound-cascade.example.json). The default single-server example is [../assets/xray-inbound.example.json](../assets/xray-inbound.example.json). The essential shape:
 
 ```json
 {

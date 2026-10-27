@@ -14,7 +14,7 @@ Client (Happ / v2RayTun / Hiddify)
   -> CDN edge
   -> origin :80 nginx (X-CDN-Secret required; 444 without it)
   -> Xray VLESS/XHTTP inbound on 127.0.0.1 (vlessenc payload)
-  -> VLESS/REALITY cascade to an exit server
+  -> outbound freedom (the origin is also the exit)
   -> Internet
 ```
 
@@ -22,7 +22,7 @@ The CDN changes the public IP and the network path. It does not guarantee that a
 
 The edge-to-origin leg is public transit. `X-CDN-Secret` keeps direct scans of the origin from finding a working endpoint; it does not authenticate users (the UUID does) and does not block requests that travel through the CDN. `vlessenc` encrypts the VLESS payload inside the HTTP headers, so the destination and data in `X-Data-*` are opaque on that leg; the transport shape (path, method, session id, sequence) remains visible.
 
-The default topology uses a second server as the exit through a REALITY cascade. When the CDN can reach the exit directly, the optional [single-server mode](references/single-server.md) removes that hop and runs origin and exit on one machine; the cascade asset stays available unchanged.
+The default topology runs origin and exit on one machine: the CDN fetches the origin directly and Xray routes the tunnel to `freedom`. A two-server REALITY cascade remains available as an explicit alternative for cases where the CDN cannot reach the exit or the exit IP must stay hidden; it uses [assets/xray-inbound-cascade.example.json](assets/xray-inbound-cascade.example.json). Trade-offs and the rollback path are in [references/single-server.md](references/single-server.md).
 
 ## What is inside
 
@@ -32,7 +32,7 @@ The default topology uses a second server as the exit through a REALITY cascade.
 | `USAGE.md` | End-to-end usage guide: working with the agent, manual deployment, command reference |
 | `references/yandex-cdn.md` | Resource shape, methods, certificate, CNAME, static request headers, edge behavior |
 | `references/origin-setup.md` | Hardened nginx port 80/443, secret gate, buffers, keepalive, Xray inbound |
-| `references/single-server.md` | Optional origin = exit mode: when one server is enough, port layout, rollback |
+| `references/single-server.md` | Default origin = exit mode: port layout, when a cascade is still needed, switching and rollback |
 | `references/xhttp-transport.md` | Modes, header budget, `vlessenc`, full `extra` object, share-link fields |
 | `references/diagnostics.md` | Test ladder, vantage contamination, log correlation |
 | `references/providers.md` | Yandex, Selectel, Gcore, VK, Timeweb, Beget comparison |

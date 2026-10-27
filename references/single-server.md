@@ -1,6 +1,6 @@
 # Single-server mode (origin = exit)
 
-The default deployment in [USAGE.md](../USAGE.md) uses two servers: a CDN-facing origin and a separate exit reached through a REALITY cascade. In single-server mode the origin is also the exit. The CDN fetches the origin directly, Xray routes the tunnel to `freedom`, and the same server keeps a direct REALITY inbound for the control path and for networks without restrictions.
+The default deployment in [USAGE.md](../USAGE.md) runs origin and exit on one server: the CDN fetches the origin directly, and Xray routes the tunnel to `freedom`. A two-server variant keeps a separate exit behind a REALITY cascade for networks where the CDN cannot reach the foreign origin.
 
 Use this mode only after measuring that Yandex CDN edges can reach the origin reliably. A working two-server deployment is not evidence for that: the failing leg in a two-server setup is exactly the one single-server mode removes.
 
@@ -19,7 +19,7 @@ Direct profile, same server:
   Phone -> TLS/REALITY :443 (tag: direct-reality) -> outbound "direct"
 ```
 
-The configuration is [assets/xray-inbound-single.example.json](../assets/xray-inbound-single.example.json). It is the two-server example with the cascade removed: both inbounds route to `freedom`, and destinations in loopback, RFC1918, link-local, CGNAT, benchmark, and IPv6 ULA ranges are blocked so the tunnel cannot reach the server's LAN or metadata endpoints. The list uses explicit CIDRs rather than `geoip:private`, so Xray does not need `geoip.dat` next to the binary to load the config.
+The configuration is [assets/xray-inbound.example.json](../assets/xray-inbound.example.json). It is the two-server example with the cascade removed: both inbounds route to `freedom`, and destinations in loopback, RFC1918, link-local, CGNAT, benchmark, and IPv6 ULA ranges are blocked so the tunnel cannot reach the server's LAN or metadata endpoints. The list uses explicit CIDRs rather than `geoip:private`, so Xray does not need `geoip.dat` next to the binary to load the config.
 
 ## One server or two
 
@@ -53,7 +53,7 @@ If nginx must keep `:443` for another hostname, change `direct-reality` in the a
 ## Setup
 
 1. Back up nginx, Xray, and the CDN resource as described in [operations.md](operations.md#backups).
-2. Install [assets/xray-inbound-single.example.json](../assets/xray-inbound-single.example.json) as the Xray config. Replace the two UUIDs, the REALITY fields, and `<VLESS_DECRYPTION_KEY>` with the value from `xray vlessenc`. Set `decryption` to `none` only if the CDN profile will also use `none`; on this topology `vlessenc` is recommended.
+2. Install [assets/xray-inbound.example.json](../assets/xray-inbound.example.json) as the Xray config. Replace the two UUIDs, the REALITY fields, and `<VLESS_DECRYPTION_KEY>` with the value from `xray vlessenc`. Set `decryption` to `none` only if the CDN profile will also use `none`; on this topology `vlessenc` is recommended.
 3. Keep the CDN inbound framing identical to the client preset. Do not change individual XHTTP keys; regenerate the client with `make-profile.py`.
 4. Install the nginx port-80 block and the CDN static header as in [USAGE.md](../USAGE.md). Remove the nginx 443 block.
 5. Validate:
@@ -88,6 +88,6 @@ bash scripts/edge-test.sh --edge "$EDGE_IP" --sni "$CDN_HOST" \
 
 ## Switching and rollback
 
-To return to the cascade, restore the previous Xray config from [assets/xray-inbound.example.json](../assets/xray-inbound.example.json), set the exit host and keys, and re-enable the nginx 443 block if you use it. The CDN resource, hostname, and secret do not change.
+To switch to the two-server cascade, restore a config based on [assets/xray-inbound-cascade.example.json](../assets/xray-inbound-cascade.example.json), set the exit host and keys, and re-enable the nginx 443 block if you use it. The CDN resource, hostname, and secret do not change.
 
 Keep the working profile and the previous config until the new mode passes the acceptance checklist in [operations.md](operations.md#acceptance-checklist). The two modes differ in routing, not in the CDN-facing framing, so a profile with the same `vlessenc` setting can be reused across the switch; only the Xray routing changes.

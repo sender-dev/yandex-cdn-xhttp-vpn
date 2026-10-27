@@ -106,13 +106,13 @@ Phone (Happ / v2RayTun / Hiddify)
        gate: no X-CDN-Secret -> 444
   -> Xray VLESS/XHTTP inbound on 127.0.0.1:9081
        vlessenc hides the payload on the CDN->origin leg
-  -> VLESS/REALITY cascade to the exit server
+  -> outbound freedom (origin = exit)
   -> Internet
 ```
 
 Provision in this order: origin, DNS, CDN resource, propagation, edge discovery, session test, profile, device acceptance. Building the client profile earlier gives you something to debug with no ground truth.
 
-**Single-server alternative.** If CDN edges can reach the exit server directly on port 80, the same machine can be origin and exit: drop the cascade, route `cdn-xhttp` to `freedom`, and keep `direct-reality` on `:443`. The CDN-facing nginx block stays on `:80`; remove its optional `:443` block because Xray owns that port. See [references/single-server.md](references/single-server.md) for the trade-offs and rollback. The two-server cascade remains the default and is unchanged.
+**Two-server cascade alternative.** This guide describes the single-server default: the origin is also the exit and Xray routes the tunnel to `freedom`. Keep the two-server topology when CDN edges cannot reach the exit, when the plain-HTTP border hop is unacceptable, or when the exit IP must stay hidden. It installs [assets/xray-inbound-cascade.example.json](assets/xray-inbound-cascade.example.json) instead of the primary asset and adds a REALITY hop; the CDN-facing nginx block and the client preset do not change. See [references/single-server.md](references/single-server.md#one-server-or-two).
 
 ### 1. Back up and inventory
 
@@ -143,7 +143,7 @@ install -d -m 700 ~/.config/vpn-cdn
 
 `vlessenc.txt` contains two authentication options; each option's `decryption` and `encryption` lines are a pair. Keep the pair out of git, chat, and tickets.
 
-Copy [assets/nginx-origin.conf](assets/nginx-origin.conf) and [assets/xray-inbound.example.json](assets/xray-inbound.example.json), then substitute the secret, the decryption key, names, paths, and the UUID.
+Copy [assets/nginx-origin.conf](assets/nginx-origin.conf) and [assets/xray-inbound.example.json](assets/xray-inbound.example.json) (the single-server default), then substitute the secret, the decryption key, names, paths, and the UUID.
 
 The non-negotiable nginx pieces:
 
@@ -403,7 +403,7 @@ Import the URI into Happ, v2RayTun, or Hiddify. Keep the old profile installed. 
 
 Acceptance is a ladder. Each rung must pass before the next one means anything:
 
-1. Direct origin and cascade control: 10/10.
+1. Direct origin control (and the cascade control if that topology is deployed): 10/10.
 2. Origin gate: no secret gives `000`/`444`, the correct secret gives `204`; the probe through the CDN gives `204`.
 3. Short probes through several edges: routed.
 4. XHTTP session on at least one edge: 5/5, with the matching `vlessenc` key if enabled.
