@@ -58,6 +58,10 @@ Skipping step 1 turns the rotation into an outage. The CDN may take time to roll
 
 ## Rotating VLESS Encryption
 
+`vlessenc` is optional. The default profile is plain VLESS, and that is the
+configuration that was verified on a phone. Rotate it only if the plain path
+is stable and every client is known to carry the key.
+
 1. Generate pairs with `xray vlessenc`. It prints two authentication options, X25519 and ML-KEM-768; the `decryption` and `encryption` lines inside one option form a pair. Use one option consistently on both sides.
 2. Install the new `decryption` in the inbound, keeping the old inbound running until clients move. A new `decryption` string is not additive, so plan a window.
 3. For a zero-gap rotation, keep a second inbound on a spare port with the new key, move clients, then remove the old inbound.
@@ -65,6 +69,23 @@ Skipping step 1 turns the rotation into an outage. The CDN may take time to roll
 5. Confirm an end-to-end session and watch for `tls`/handshake errors on clients that still hold the old key.
 
 An old client key fails immediately after the server switches. There is no fallback inside `vlessenc`; the fallback is a separate `none` profile.
+
+## Rotating a UUID
+
+A UUID is the cheapest credential to rotate and the safest to rotate first,
+because it does not touch the transport framing.
+
+1. Add the new UUID to the **existing working inbound** as a second client
+   entry. Leave every XHTTP key, the path, and the `decryption` mode alone.
+2. Generate a profile for the new UUID from the same preset that produced the
+   working profile, and verify it against the live edge before it reaches a
+   device.
+3. Move devices to the new UUID, then remove the old entry from the inbound.
+
+Only after this is stable should you consider a new path or a new inbound. A
+new inbound is a new framing, and the framing is what breaks mobile clients;
+see [single-server.md](single-server.md#rotating-a-key-without-breaking-the-tunnel).
+
 
 ## Change procedure
 
@@ -156,6 +177,35 @@ A weekly session check on the pinned edge and the domain fallback catches gradua
 2. Validate the inbound: its clients must not have an `encryption` field.
 3. Check the client core version; Xray-core older than 25.9.5 may ignore the field and hang.
 4. If the client is sing-box based and does not support it, use the `none`/`none` fallback profile rather than downgrading the server.
+5. Check the share link itself: a link that omits `encryption` cannot carry a key, and a link that carries the key but whose importer does not model the parameter drops it silently.
+
+### A share link imports but the tunnel never starts
+
+This is the mobile failure mode that a desktop test cannot reproduce, because
+the desktop client reads the same fields from a JSON file and the mobile
+client reads them from a share link.
+
+1. Compare the `extra` blob of the failing link with the `extra` blob of a
+   link that works, byte for byte. The keys, their order, the value types, the
+   JSON whitespace, and the number of percent-encoding layers all matter.
+2. Check the value types. A mobile importer models `uplinkChunkSize` as a
+   string; a JSON number is dropped or refused.
+3. Check the encoding layers. The blob is percent-encoded twice in a mobile
+   share link: `%257B` at the start, not `%7B`. One layer decodes to a string
+   of escapes and parses as nothing.
+4. Check the key set. A strict importer can refuse a blob that carries keys
+   it does not model. The proven mobile shape has exactly five keys:
+   `scMaxEachPostBytes`, `scMinPostsIntervalMs`, `uplinkChunkSize`,
+   `uplinkDataPlacement`, `uplinkHTTPMethod`.
+5. Check `mode`. It is a top-level share-link parameter; a client that looks
+   for it inside `extra` finds nothing and falls back to its default mode.
+6. Check `encryption`. Plain VLESS must not carry the parameter at all, and
+   a `vlessenc` key must be present on both the link and the inbound.
+7. Regenerate the link from the same preset that produced the working link
+   instead of editing it by hand, and compare the two blobs again.
+8. If the blobs are identical, the difference is on the server side. Compare
+   the inbound that serves the path against the inbound that works, key by
+   key, and make the new inbound a verbatim copy.
 
 ### TLS errors
 
@@ -178,6 +228,7 @@ A deployment is accepted only when all of these are true:
 - [ ] Direct origin without `X-CDN-Secret` returns `000` or `444`; with the header, the probe returns `204`.
 - [ ] `/_cdn_secret_probe` through the CDN returns `204`.
 - [ ] If `vlessenc` is enabled, the inbound has only `decryption`, the client only `encryption`, and a loopback or direct session passes.
+- [ ] The share link's `extra` blob is byte-identical to the blob of a link that is known to work on the target client.
 - [ ] At least one edge passes 5/5 XHTTP sessions.
 - [ ] The pinned profile passes 20/20 connect/health attempts from the target network.
 - [ ] The target app sends and receives data through the tunnel.

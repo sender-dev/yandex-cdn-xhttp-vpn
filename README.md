@@ -96,7 +96,7 @@ install -d -m 700 ~/.config/vpn-cdn
 python3 scripts/make-profile.py \
   --address 198.51.100.20 --sni cdn.example.com --path /api-stream \
   --uuid-file ~/.config/vpn-cdn/uuid \
-  --preset yandex-get --name 'CDN pinned' \
+  --preset happ-parity --name 'CDN pinned' \
   --out ~/.config/vpn-cdn/pinned.vless \
   --client-config ~/.config/vpn-cdn/pinned.json
 
@@ -106,9 +106,11 @@ bash scripts/edge-test.sh \
   --uuid-file ~/.config/vpn-cdn/uuid --attempts 5
 ```
 
+`happ-parity` is the default preset and the share-link shape that was verified on a phone: five XHTTP keys in `extra`, `uplinkChunkSize` as a string, `mode` at the top level of the link, the blob percent-encoded twice, and no `encryption` parameter for plain VLESS.
+
 Add `--vless-encryption "$client_key"` to the profile and test commands when the inbound uses a `vlessenc` decryption key. Omitting it against an encrypted inbound makes the first packet fail.
 
-Add `--chunk-size 4000` when the importing client fails with `cannot unmarshal string into Go struct field ...uplinkChunkSize of type uint32`. The preset emits a `3000-4000` range, which newer cores accept and older ones reject; an integer works on both. A profile built with `minimal` will not talk to an inbound that expects `sessionPlacement`/padding keys — keep the full preset and change only the chunk.
+Add `--chunk-size 4000` when the importing client fails with `cannot unmarshal string into Go struct field ...uplinkChunkSize of type uint32`. A range string such as `3000-4000` is accepted by newer cores and rejected by older ones; an integer works on both. A profile built with `minimal` will not talk to an inbound that expects `uplinkDataKey`/session-placement/padding keys — keep the full preset and change only the chunk.
 
 `edge-test.sh` exits `0` for `LIVE`, `1` for `PARTIAL`, `2` for a setup error, and `3` for `DEAD`. Use `--dry-run` to validate the generated Xray config without sending traffic, and `--json` for machine-readable output.
 
@@ -138,10 +140,12 @@ Verified in production on 2026-10-27 (Yandex Cloud CDN, Xray 26.10.21, nginx 1.2
 - Aggressive edge flapping persists after a resource change: during rollout, one edge still served the previous origin, one returned no response at all, and one carried 10/10 for the encrypted profile but 7–8/10 for an older xmux profile. Rank edges again after every origin switch.
 - Origin switching on the resource itself takes about 15 minutes to reach the edge fleet; `active: true` is not evidence of rollout. Distinguish origins by a response only the new one returns.
 - A resource update needs `origin-group create` in addition to `resource update`; a role can allow reading the group list and updating the resource without allowing `origin-group get`.
+- A mobile share link is not the same artifact as the Xray client JSON. The verified link's `extra` blob has exactly five keys, renders `uplinkChunkSize` as a string, is percent-encoded twice, and keeps `mode` at the top level. A blob that differs in key set, value type, JSON whitespace, or encoding depth imports and then never connects.
+- A new credential is safest as a new UUID on the proven path, with the inbound copied verbatim. The tunnel framing is what mobile clients reject, not the UUID.
 
 Not verified, and not claimed:
 
-- `vlessenc` support in every mobile client. Keep a `none` fallback profile until the target device passes.
+- `vlessenc` on a mobile device. The encrypted profile was verified from a desktop through a live edge but did not establish on the target phone, while the plain-VLESS profile on the same path did. The two profiles also differed in the share-link shape, in the pinned edge, and in the inbound, so the encryption was not isolated as the cause. Keep plain VLESS as the default and a `none` fallback profile until the target device passes.
 - That every edge in the fleet injects `X-CDN-Secret`. Test the edges you pin, and re-test after rotation, before relying on the gate.
 - `keepalive_requests 100000` as an optimum under a long production soak.
 - Yandex WebSocket (support enablement required; the tested edge passed no Upgrade).
@@ -158,6 +162,7 @@ The repository intentionally contains no live edge IPs, UUIDs, origin addresses,
 - Enable `vlessenc` only when the target client core supports it, and keep a `none` fallback profile during rollout.
 - Disable caching and buffering at the edge, in nginx, and in the response headers.
 - Keep XHTTP settings identical on both ends; generate them from one preset.
+- For a mobile share link, keep the `extra` blob identical to a link that is known to work on the target client; compare them byte for byte.
 - Keep request headers under the edge limit (3–4 KiB chunks, 100–1000 bytes of padding).
 - Test from a clean vantage point. Fake-IP DNS, local proxies, and datacenter sources can invalidate results.
 - Accept only after a real device on the real SIM succeeds, during an active restriction window if that is the claim.

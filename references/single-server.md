@@ -34,7 +34,7 @@ The configuration is [assets/xray-inbound.example.json](../assets/xray-inbound.e
 
 Choose single-server when the CDN reaches the foreign VPS on port 80 without `502`/`504` and without DPI interference, and when exposing that IP as the origin is acceptable. Keep the cascade when the foreign IP is unreachable from the CDN, when the plain-HTTP border hop is unacceptable, or when the exit must stay hidden.
 
-Single-server does not remove the border hop. It removes the domestic hop and makes the remaining one plain HTTP unless the origin serves TLS. Enable `vlessenc` on the CDN inbound in this mode; the payload is then ciphertext even though the request itself is plain HTTP.
+Single-server does not remove the border hop. It removes the domestic hop and makes the remaining one plain HTTP unless the origin serves TLS. `vlessenc` on the CDN inbound makes the payload ciphertext even though the request itself is plain HTTP; it is optional, and the profile that was verified on a phone used plain VLESS with `encryption` absent from the share link.
 
 ## Port layout
 
@@ -62,10 +62,22 @@ Switching the CDN origin replaces the server behind a hostname that already-impo
 
 The old path carries whatever encryption the old inbound had (`none` for a pre-`vlessenc` profile). It is a compatibility path, not a second hardened one: retire it once every client has moved to the new profile.
 
+## Rotating a key without breaking the tunnel
+
+Two ways to add a new credential, and only one of them is low risk.
+
+**New UUID on the proven path.** Add the new UUID to the *existing, working* inbound as a second client entry and keep every transport knob untouched. The framing, the path, and the edge are all already proven, so the only variable is the credential. This is the cheapest rotation and it keeps the old key alive as a fallback until the new one is confirmed on a device.
+
+**New inbound on a new path.** This introduces a second framing into the system. The new inbound must be a byte-for-byte copy of the working one, including the `decryption` mode, the chunk size, the header budget, and the padding and session keys. The only permitted differences are the path and the UUID list. Anything else, and a client that works against the old path can still fail against the new one for reasons that are hard to see from the outside: the server may parse the session with the default session key while the client sends a custom one, or the server may expect a `vlessenc` handshake that the client never performs.
+
+When a new path is unavoidable, prove the copy before the client sees it: run the new inbound locally, connect with a client built from the *same* settings, and only then generate the share link. Comparing the new profile against the old one, field by field, is faster than bisecting a phone.
+
+Keep the working key and the working path until the new credential is confirmed on a real device. A fallback that has been switched off is not a fallback.
+
 ## Setup
 
 1. Back up nginx, Xray, and the CDN resource as described in [operations.md](operations.md#backups).
-2. Install [assets/xray-inbound.example.json](../assets/xray-inbound.example.json) as the Xray config. Replace the two UUIDs, the REALITY fields, and `<VLESS_DECRYPTION_KEY>` with the value from `xray vlessenc`. Set `decryption` to `none` only if the CDN profile will also use `none`; on this topology `vlessenc` is recommended.
+2. Install [assets/xray-inbound.example.json](../assets/xray-inbound.example.json) as the Xray config. Replace the two UUIDs and the REALITY fields. The CDN inbound ships with `"decryption": "none"`, which matches a plain-VLESS client and is the configuration that was verified on a phone; only replace it with the output of `xray vlessenc` when the client side is known to carry the key.
 3. Keep the CDN inbound framing identical to the client preset. Do not change individual XHTTP keys; regenerate the client with `make-profile.py`.
 4. Install the nginx port-80 block and the CDN static header as in [USAGE.md](../USAGE.md). Remove the nginx 443 block.
 5. Validate:
@@ -90,10 +102,10 @@ bash scripts/origin-check.sh --host "$CDN_HOST" --scheme https --port 443 \
   --cdn-secret "$CDN_SECRET"
 
 # The edge carries an XHTTP session.
-VLESS_ENCRYPTION=$(sed -n 's/^"encryption": "\(.*\)"$/\1/p' ~/.config/vpn-cdn/vlessenc.txt | head -1)
+# --vless-encryption is only needed when the inbound uses a vlessenc key.
 bash scripts/edge-test.sh --edge "$EDGE_IP" --sni "$CDN_HOST" \
   --path /api-stream --uuid-file ~/.config/vpn-cdn/uuid \
-  --vless-encryption "$VLESS_ENCRYPTION" --attempts 5
+  --attempts 5
 ```
 
 7. Test the direct REALITY profile from an unrestricted network. It uses `:443` on the same address and does not pass through the CDN.

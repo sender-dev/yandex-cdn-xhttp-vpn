@@ -4,6 +4,8 @@ This guide describes the setup that was actually deployed and accepted: a VLESS/
 
 Version 2 adds the hardened origin profile. The base GET/header deployment is field-verified. The secret gate, keepalive tuning, and `vlessenc` were validated locally against Xray 26.3.27 and nginx 1.26.3, then in production on 2026-10-27 against Xray 26.10.21 and a live Yandex edge: the edge injected `X-CDN-Secret`, the gate closed direct scans, and `vlessenc` carried 10/10 sessions. The phone acceptance on the target SIM is still the step that proves the mobile path; [README.md](README.md) keeps the exact split.
 
+The mobile path has its own contract. A share link is not the same artifact as the Xray client JSON, and the mobile importer is stricter: it models five XHTTP keys, keeps `mode` at the top level of the link, reads `uplinkChunkSize` as a string, and expects the `extra` blob to be percent-encoded twice. A link that breaks any of those rules imports and then never connects. The profile that was verified on a phone is plain VLESS with the five-key blob; `vlessenc` and the extra knobs are optional.
+
 Everything below uses placeholders. Replace them with your own values and keep the real ones out of commits, tickets, and chat:
 
 ```bash
@@ -133,17 +135,22 @@ Keep the direct REALITY profile and inbound working. The direct path is your con
 
 The origin needs a reachable address, an nginx entry point on port 80, and a loopback-only Xray inbound. A certificate is optional for the tested path: the edge fetched origin over plain HTTP/80 even when the panel reported HTTPS.
 
-Generate the two secrets outside the repository, with mode `0600`:
+Generate the secrets outside the repository, with mode `0600`:
 
 ```bash
 install -d -m 700 ~/.config/vpn-cdn
 (umask 077; openssl rand -hex 32 > ~/.config/vpn-cdn/cdn-secret)
+```
+
+The VLESS Encryption pair is optional:
+
+```bash
 (umask 077; xray vlessenc > ~/.config/vpn-cdn/vlessenc.txt)
 ```
 
 `vlessenc.txt` contains two authentication options; each option's `decryption` and `encryption` lines are a pair. Keep the pair out of git, chat, and tickets.
 
-Copy [assets/nginx-origin.conf](assets/nginx-origin.conf) and [assets/xray-inbound.example.json](assets/xray-inbound.example.json) (the single-server default), then substitute the secret, the decryption key, names, paths, and the UUID.
+Copy [assets/nginx-origin.conf](assets/nginx-origin.conf) and [assets/xray-inbound.example.json](assets/xray-inbound.example.json) (the single-server default), then substitute the secret, names, paths, and the UUID. The asset ships with `"decryption": "none"`, which matches a plain-VLESS client and is the configuration that was verified on a phone; only substitute a `vlessenc` key when the client is known to carry it.
 
 The non-negotiable nginx pieces:
 
@@ -218,17 +225,16 @@ The inbound must match the client on every framing key, and the two halves of `v
   "mode": "packet-up",
   "uplinkHTTPMethod": "GET",
   "uplinkDataPlacement": "header",
-  "uplinkChunkSize": "3000-4000",
-  "sessionPlacement": "header",
-  "sessionKey": "X-Auth-Token",
-  "seqPlacement": "query",
-  "seqKey": "page",
-  "xPaddingBytes": "100-1000",
-  "serverMaxHeaderBytes": 32768
+  "uplinkChunkSize": 16384,
+  "scMaxEachPostBytes": 32768,
+  "scMinPostsIntervalMs": 10,
+  "serverMaxHeaderBytes": 65536
 }
 ```
 
-The inbound's `decryption` carries the server key. Its `clients` array contains only `id` and `flow`; an `encryption` field there is rejected at startup. The client profile carries only `users[].encryption`.
+These are the framing keys that a mobile share link models. If the client preset carries `uplinkDataKey`, session placement, sequence placement, or padding keys, the inbound must carry the same ones; a key that is present on one side and absent on the other is a different framing, not a default.
+
+The inbound's `decryption` carries the server key, or the literal `none` for plain VLESS. Its `clients` array contains only `id` and `flow`; an `encryption` field there is rejected at startup. The client profile carries `users[].encryption`, and it must always be present: a modern core refuses to start without it and prints `VLESS users: please add/set "encryption":"none" for every user`.
 
 `mode: "auto"` with header placement is rejected at startup. `serverMaxHeaderBytes` belongs in the inbound JSON, not in a share link. Xray silently ignores unknown keys, so validate and dump:
 
@@ -347,14 +353,12 @@ install -d -m 700 ~/.config/vpn-cdn
 Then test each candidate edge:
 
 ```bash
-VLESS_ENCRYPTION=$(sed -n 's/^"encryption": "\(.*\)"$/\1/p' ~/.config/vpn-cdn/vlessenc.txt | head -1)
 bash scripts/edge-test.sh \
   --edge "$EDGE_IP" --sni "$CDN_HOST" --path "$TUNNEL_PATH" \
-  --uuid-file ~/.config/vpn-cdn/uuid --attempts 5 \
-  --vless-encryption "$VLESS_ENCRYPTION"
+  --uuid-file ~/.config/vpn-cdn/uuid --attempts 5
 ```
 
-`xray vlessenc` prints two authentication options; this takes the client key from the first. If you use the second option on the server, take its `encryption` line instead. Omit `--vless-encryption` only if the inbound has no `decryption`. The script starts a temporary Xray client, sends a series through the edge, and reports `LIVE`, `PARTIAL`, or `DEAD`. Exit codes: `0` LIVE, `1` PARTIAL, `2` setup error, `3` DEAD. Use `--dry-run` to validate the generated config without sending traffic and `--json` for machine-readable output.
+Add `--vless-encryption "$CLIENT_KEY"` when the inbound uses a `vlessenc` key. `xray vlessenc` prints two authentication options; this takes the client key from the first. If you use the second option on the server, take its `encryption` line instead. Omit the flag when the inbound has no `decryption`. The script starts a temporary Xray client, sends a series through the edge, and reports `LIVE`, `PARTIAL`, or `DEAD`. Exit codes: `0` LIVE, `1` PARTIAL, `2` setup error, `3` DEAD. Use `--dry-run` to validate the generated config without sending traffic and `--json` for machine-readable output.
 
 This is the discriminating test. In the tested deployment, short probes passed on every edge, but only two edges carried sessions consistently, one was partial, and one was unusable. The domain profile inherited a 20–35% stall rate. Pinning a verified edge removed it.
 
@@ -366,7 +370,7 @@ Pinned profile:
 python3 scripts/make-profile.py \
   --address "$EDGE_IP" --sni "$CDN_HOST" --path "$TUNNEL_PATH" \
   --uuid-file ~/.config/vpn-cdn/uuid \
-  --preset yandex-get --name 'CDN pinned' \
+  --preset happ-parity --name 'CDN pinned' \
   --out ~/.config/vpn-cdn/pinned.vless \
   --client-config ~/.config/vpn-cdn/pinned.json
 ```
@@ -377,7 +381,7 @@ Domain fallback, for when the pinned edge is reassigned:
 python3 scripts/make-profile.py \
   --address "$CDN_HOST" --sni "$CDN_HOST" --path "$TUNNEL_PATH" \
   --uuid-file ~/.config/vpn-cdn/uuid \
-  --preset yandex-get --name 'CDN fallback' \
+  --preset happ-parity --name 'CDN fallback' \
   --out ~/.config/vpn-cdn/fallback.vless \
   --client-config ~/.config/vpn-cdn/fallback.json
 ```
@@ -398,6 +402,22 @@ xray run -test -dump -config ~/.config/vpn-cdn/pinned.json | jq '.outbounds[0].s
 If a key you wrote is missing from the dump, the installed Xray does not implement it. The effective names are `sessionPlacement` and `sessionKey`; `xmux` is enabled by the object's presence, not by a flag. The dump command uses `jq` for readability; any JSON filter works.
 
 Import the URI into Happ, v2RayTun, or Hiddify. Keep the old profile installed. On iOS, a QR code is convenient but contains the UUID; do not share it.
+
+A share link is not the same artifact as the client JSON, and the mobile importer is stricter than the desktop client. The `extra` blob of a mobile link carries exactly the keys the app models:
+
+```json
+{
+  "scMaxEachPostBytes" : 32768,
+  "scMinPostsIntervalMs" : 10,
+  "uplinkChunkSize" : "16384",
+  "uplinkDataPlacement" : "header",
+  "uplinkHTTPMethod" : "GET"
+}
+```
+
+`mode` stays at the top level of the link, `uplinkChunkSize` is a string, the blob is percent-encoded twice, and plain VLESS carries no `encryption` parameter. `make-profile.py --preset happ-parity` writes exactly this and the test suite compares the result byte for byte against a link that was proven on a phone.
+
+When a link imports but the tunnel never starts, diff the `extra` blob of the failing link against the blob of a link that works before touching the server. The key set, the value types, the JSON whitespace, and the number of encoding layers are all part of the contract, and none of them are visible in the client's error message.
 
 ### 8. Accept on the target device
 
@@ -458,6 +478,8 @@ Rules that keep the deployment healthy:
 | `405` on the uplink | Client sends POST or OPTIONS where GET is required | Set `uplinkHTTPMethod=GET` |
 | `413` on the uplink | Request body sent to an edge that forbids it | Use header placement; remove the body |
 | `431` or `400` on large requests | Header chunk or padding too large | Lower `uplinkChunkSize`, raise nginx buffers |
+| Share link imports in the app but the tunnel never starts | The `extra` blob does not match what the mobile importer models | Diff it byte for byte against a known-good link; regenerate with `--preset happ-parity` |
+| Client core refuses to start with `VLESS users: please add/set "encryption":"none"` | The profile has no explicit `encryption` on the VLESS user | Emit `"encryption": "none"` on every user |
 | Origin closes immediately, `444` or an empty reply | Secret gate rejected the request | Check the CDN static request header and the nginx `map` value |
 | Direct origin works, probe through CDN fails | Edge is not injecting `X-CDN-Secret` | Verify `staticRequestHeaders` on the resource; wait for edge rollout |
 | Session establishes then dies after enabling `vlessenc` | Client and server keys are from different pairs, or the client core is too old | Regenerate and install both halves; use the `none` fallback if the client cannot support it |
@@ -501,13 +523,12 @@ python3 scripts/cdn-probe.py cache --host "$CDN_HOST" --path "$TUNNEL_PATH"
 
 # Session
 bash scripts/edge-test.sh --edge "$EDGE_IP" --sni "$CDN_HOST" \
-  --path "$TUNNEL_PATH" --uuid-file ~/.config/vpn-cdn/uuid --attempts 5 \
-  --vless-encryption "$VLESS_ENCRYPTION"
+  --path "$TUNNEL_PATH" --uuid-file ~/.config/vpn-cdn/uuid --attempts 5
 
 # Profiles (add --vless-encryption "$VLESS_ENCRYPTION" when the inbound uses it)
 python3 scripts/make-profile.py --address "$EDGE_IP" --sni "$CDN_HOST" \
   --path "$TUNNEL_PATH" --uuid-file ~/.config/vpn-cdn/uuid \
-  --preset yandex-get --name 'CDN pinned' \
+  --preset happ-parity --name 'CDN pinned' \
   --out ~/.config/vpn-cdn/pinned.vless \
   --client-config ~/.config/vpn-cdn/pinned.json
 
@@ -533,8 +554,8 @@ Where to read more:
 - Consumer and datacenter sources can be treated differently by the same edge. A server-side test does not prove the phone path.
 - Long-lived sessions consume edge resources. Some providers rate-limit them or prohibit VPN traffic in their terms. Yandex was field-verified; several other providers explicitly disallow this workload or failed the test.
 - Use this only on infrastructure you own or are authorized to administer. Do not use it to attack, scan, or evade controls on systems you do not own.
-- `X-CDN-Secret` stops scans that reach the origin directly. It is not user authentication and does not help if someone uses the public CDN hostname; the UUID and `vlessenc` key remain the access control.
-- `vlessenc` needs Xray-core 25.9.5 or newer. Happ and v2RayTun bundle Xray-core and may support it; sing-box-based clients such as Hiddify may not. Keep a `none`/`none` fallback profile while testing.
+- `X-CDN-Secret` stops scans that reach the origin directly. It is not user authentication and does not help if someone uses the public CDN hostname; the UUID remains the access control.
+- `vlessenc` needs Xray-core 25.9.5 or newer and is not proven on a mobile device. Happ and v2RayTun bundle Xray-core and may support it; sing-box-based clients such as Hiddify may not. Plain VLESS is the default; keep a `none`/`none` fallback profile while testing.
 - Keep UUIDs, keys, origin addresses, resource IDs, and ticket contents out of the repository, chat, and public issues.
 
 The deployment this guide describes is accepted only when the checklist in [references/operations.md](references/operations.md#acceptance-checklist) passes in full.

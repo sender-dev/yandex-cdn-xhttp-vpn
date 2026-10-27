@@ -146,6 +146,9 @@ On the phone, with Wi-Fi off:
 - `444` at the origin, or an empty reply through the edge: the secret gate rejected the request. The edge did not inject `X-CDN-Secret` or the value does not match.
 - `204` on `/_cdn_secret_probe` but sessions fail: the chain and gate are healthy; debug framing and keys, not the CDN.
 - Session establishes then dies with no origin error and a fresh `vlessenc` key: client and server keys are from different pairs, or the client core is too old.
+- The profile imports in the app but nothing ever connects, while the same server serves another profile that works: compare the two `extra` blobs byte for byte. The key set, the value types (`uplinkChunkSize` is a string in a share link), the JSON whitespace, and the number of percent-encoding layers are all part of the contract.
+- The client core refuses to start with `VLESS users: please add/set "encryption":"none" for every user`: the profile was written without an explicit `encryption` field on the VLESS user.
+- The client aborts with `cannot unmarshal string into Go struct field ...uplinkChunkSize of type uint32`: the profile carries a chunk-size range where the core wants a plain integer.
 - `413`: a request body was sent to an edge that forbids it.
 - `431`/`400` on large requests: header budget exceeded.
 - `malformed HTTP/1.x` plus HTTP/2 SETTINGS bytes: ALPN mismatch; do not force HTTP/1.1.

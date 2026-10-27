@@ -196,7 +196,7 @@ The cascade inbound is VLESS with XHTTP, bound to loopback, routing to REALITY; 
   "protocol": "vless",
   "settings": {
     "clients": [{ "id": "<UUID>", "flow": "" }],
-    "decryption": "<VLESS_DECRYPTION_KEY>"
+    "decryption": "none"
   },
   "streamSettings": {
     "network": "xhttp",
@@ -206,22 +206,11 @@ The cascade inbound is VLESS with XHTTP, bound to loopback, routing to REALITY; 
       "mode": "packet-up",
       "uplinkHTTPMethod": "GET",
       "uplinkDataPlacement": "header",
-      "uplinkChunkSize": "3000-4000",
-      "scMaxEachPostBytes": 8192,
-      "scMaxBufferedPosts": 64,
+      "uplinkChunkSize": 16384,
+      "scMaxEachPostBytes": 32768,
+      "scMaxBufferedPosts": 30,
       "scMinPostsIntervalMs": 10,
-      "sessionPlacement": "header",
-      "sessionKey": "X-Auth-Token",
-      "seqPlacement": "query",
-      "seqKey": "page",
-      "xPaddingKey": "_rupl",
-      "xPaddingHeader": "X-Cache",
-      "xPaddingPlacement": "queryInHeader",
-      "xPaddingMethod": "tokenish",
-      "xPaddingObfsMode": true,
-      "xPaddingBytes": "100-1000",
-      "uplinkDataKey": "X-Data",
-      "serverMaxHeaderBytes": 32768
+      "serverMaxHeaderBytes": 65536
     }
   }
 }
@@ -230,7 +219,9 @@ The cascade inbound is VLESS with XHTTP, bound to loopback, routing to REALITY; 
 Notes:
 
 - `decryption` is the only encryption field on the inbound. Do not add `encryption` to the inbound client objects: Xray 26.3.27 rejects the config with `"encryption" should not be in inbound settings`. The client outbound carries the matching `encryption` string in `users[]`.
-- Generate both strings once with `xray vlessenc`. Keep the pair together; a client key from a different run does not decrypt. VLESS Encryption needs Xray-core 25.9.5 or newer. If the target client cannot use it, set `decryption: "none"` on the server and `encryption: "none"` on the client.
+- `"decryption": "none"` is the default and the configuration that was verified on a phone. Replace it with the output of `xray vlessenc` only when the client is known to carry the matching key. Generate both strings once and keep the pair together; a client key from a different run does not decrypt. VLESS Encryption needs Xray-core 25.9.5 or newer.
+- The framing keys above are the parity set that a mobile share link models. If the client preset carries `uplinkDataKey`, session placement, sequence placement, or padding keys, the inbound must carry the same ones; a key that is present on one side and absent on the other is a different framing, not a default.
+- `uplinkChunkSize` in the inbound JSON is a number. In a share-link `extra` blob the same value is a string, because the mobile importer models it as text.
 - VLESS Encryption is independent of TLS. `security: "none"` still means there is no TLS between nginx and Xray on loopback; the payload inside the HTTP headers is encrypted by `vlessenc` before XHTTP frames it.
 - `serverMaxHeaderBytes` is a server-side acceptance limit. Do not bury it inside a share-link `extra` string; set it in the inbound JSON.
 - `mode: "auto"` is valid only when the uplink stays in the body/default placement. Xray refuses to start with `mode: "auto"` plus `uplinkDataPlacement: "header"` ("UplinkDataPlacement can be header only in packet-up mode"), so the header-placement inbound uses `packet-up`.

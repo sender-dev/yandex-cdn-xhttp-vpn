@@ -72,17 +72,22 @@ The origin needs an address reachable from the edge, an nginx entry point, and a
 
 Decide the topology before installing Xray. The default is [assets/xray-inbound.example.json](assets/xray-inbound.example.json): origin and exit on one server, both inbounds routed to `freedom`. When CDN edges cannot reach the exit, the exit IP must stay hidden, or the plain-HTTP border hop is unacceptable, install [assets/xray-inbound-cascade.example.json](assets/xray-inbound-cascade.example.json): the same CDN-facing inbound plus a REALITY cascade to a separate exit. In single-server mode Xray owns `:443`; in cascade mode the nginx 443 block may be kept. Both assets share the same XHTTP framing, so the client preset does not change. Trade-offs and rollback are in [references/single-server.md](references/single-server.md).
 
-Generate both secrets outside the repository and store them mode `0600`:
+Generate the CDN secret outside the repository and store it mode `0600`:
 
 ```bash
 install -d -m 700 ~/.config/vpn-cdn
 (umask 077; openssl rand -hex 32 > ~/.config/vpn-cdn/cdn-secret)
+```
+
+The VLESS Encryption key pair is optional. Generate it only when you intend to use it:
+
+```bash
 (umask 077; xray vlessenc > ~/.config/vpn-cdn/vlessenc.txt)
 ```
 
 `xray vlessenc` prints two authentication options (X25519 and ML-KEM-768). Each option's `decryption` and `encryption` lines are a pair; use one option consistently.
 
-Use [assets/nginx-origin.conf](assets/nginx-origin.conf) and [assets/xray-inbound.example.json](assets/xray-inbound.example.json). In the nginx file, replace `CHANGE_ME_CDN_SECRET` with the generated value. In the inbound, put the **decryption** string from `vlessenc.txt` in `settings.decryption` and leave `encryption` out of the inbound client entries. The client gets the **encryption** string from the same option.
+Use [assets/nginx-origin.conf](assets/nginx-origin.conf) and [assets/xray-inbound.example.json](assets/xray-inbound.example.json). In the nginx file, replace `CHANGE_ME_CDN_SECRET` with the generated value. The inbound ships with `"decryption": "none"`, which matches a plain-VLESS client and is the configuration that was verified on a phone. To use VLESS Encryption, put the **decryption** string from `vlessenc.txt` in `settings.decryption` and leave `encryption` out of the inbound client entries; the client then gets the **encryption** string from the same option.
 
 The gate belongs only on tunnel paths. `/health`, `/_cdn_secret_probe`, and `/.well-known/acme-challenge/` stay reachable; `/_cdn_secret_probe` returns `204` with the header and closes the connection without it. A server-level `return 444` is a self-inflicted outage.
 
@@ -138,16 +143,24 @@ A short request that passes proves the edge routes the resource. It does not pro
 # Create the UUID once, outside the repository, and reuse it everywhere.
 install -d -m 700 ~/.config/vpn-cdn
 (umask 077; xray uuid > ~/.config/vpn-cdn/uuid)
-# Optional but recommended when the client core supports it:
-client_key=$(sed -n 's/^"encryption": "\(.*\)"$/\1/p' ~/.config/vpn-cdn/vlessenc.txt | head -1)
 python3 scripts/make-profile.py \
   --address 198.51.100.20 --sni cdn.example.com --path /api-stream \
   --uuid-file ~/.config/vpn-cdn/uuid \
-  --vless-encryption "$client_key" \
-  --preset yandex-get --name 'CDN pinned' --out ~/.config/vpn-cdn/pinned.vless
+  --preset happ-parity --name 'CDN pinned' --out ~/.config/vpn-cdn/pinned.vless
 ```
 
-The generator writes the share URI (`--out`) and, optionally, a matching Xray client config (`--client-config`). Use `--address` = a verified edge IP for the pinned profile, or the CDN hostname for the fallback. Omit `--vless-encryption` only if the server inbound still uses `"decryption": "none"`; a client and server with different encryption settings fail at the first packet. Read [references/xhttp-transport.md](references/xhttp-transport.md) before changing any XHTTP key.
+The generator writes the share URI (`--out`) and, optionally, a matching Xray client config (`--client-config`). Use `--address` = a verified edge IP for the pinned profile, or the CDN hostname for the fallback.
+
+`--preset happ-parity` is the default and the shape that was verified on a phone: five XHTTP keys, `uplinkChunkSize` as a string, `mode` at the top level of the link, and no `encryption` parameter for plain VLESS. The `extra` blob is percent-encoded twice and pretty-printed the way mobile clients print it, so the generated link is byte-comparable with a link that was proven on a device.
+
+To enable VLESS Encryption, add the client key from the same `xray vlessenc` run as the inbound `decryption`:
+
+```bash
+client_key=$(sed -n 's/^"encryption": "\(.*\)"$/\1/p' ~/.config/vpn-cdn/vlessenc.txt | head -1)
+python3 scripts/make-profile.py ... --vless-encryption "$client_key"
+```
+
+Omit `--vless-encryption` when the server inbound still uses `"decryption": "none"`; a client and server with different encryption settings fail at the first packet. Read [references/xhttp-transport.md](references/xhttp-transport.md) before changing any XHTTP key.
 
 ### 5. Test the session end to end
 
@@ -155,13 +168,14 @@ The generator writes the share URI (`--out`) and, optionally, a matching Xray cl
 bash scripts/edge-test.sh \
   --edge 198.51.100.20 --sni cdn.example.com --path /api-stream \
   --uuid-file ~/.config/vpn-cdn/uuid \
-  --vless-encryption "$client_key" \
   --attempts 5
 ```
 
 The script starts a temporary Xray client, sends a series through the edge to a known URL, and reports `LIVE`, `PARTIAL`, or `DEAD`. It cleans up by PID, never with `pkill -f`. Use `--dry-run` to validate the generated config without sending traffic.
 
 A `LIVE` result from a datacenter is necessary but not sufficient. Continue to the device test.
+
+A desktop test does not cover the mobile import path. When a link imports but never connects, compare its `extra` blob with a blob that is known to work, byte for byte, before touching the server.
 
 ### 6. Accept on the target device
 
@@ -187,6 +201,9 @@ Monitoring, edge rotation, secret rotation, and the incident runbook are in [ref
 | `413` on the uplink | Request body sent where the edge forbids it | Switch to header placement; remove the body |
 | `431` or `400` on large requests | Header chunk or padding too large | Lower `uplinkChunkSize`, raise nginx buffers |
 | Client aborts with `cannot unmarshal string into Go struct field ...uplinkChunkSize of type uint32` | The client core predates range parsing and wants a plain integer | Regenerate with `--chunk-size 4000`; keep the range string only for cores that accept it |
+| Client core refuses to start with `VLESS users: please add/set "encryption":"none" for every user` | The profile was written without an explicit `encryption` field on the VLESS user | Emit `"encryption": "none"` on every user; the generator does this |
+| Share link imports in the app but the tunnel never starts, while another profile against the same server works | The `extra` blob does not match what the mobile importer models: wrong key set, wrong value type, wrong JSON whitespace, or the wrong number of percent-encoding layers | Compare the blob byte for byte with a known-good link; regenerate with `--preset happ-parity` |
+| Share link imports, tunnel starts, then the first packet fails | The link carries a `vlessenc` key the server does not expect, or the server uses `vlessenc` and the link does not carry a key | Plain VLESS: no `encryption` parameter in the link and `"decryption": "none"` on the inbound |
 | Empty reply or `444` through the CDN | The edge did not send `X-CDN-Secret`, or sent the wrong one | Read back `--static-request-headers`; test `/_cdn_secret_probe` through the CDN hostname |
 | Direct origin request returns `444` (expected) | The gate is working; the origin is not meant to be public | Test through the CDN, not by IP |
 | First packet fails right after enabling `vlessenc` | Client and server keys swapped or mismatched; old client core | Server gets `decryption`, client gets `encryption`; both from the same `xray vlessenc` run |
@@ -204,10 +221,18 @@ Verified in the October 2026 field work behind this skill:
 
 - Yandex Cloud CDN with XHTTP `packet-up` and GET/header uplink worked from an MTS SIM during an active restriction window.
 - The same resource had working and non-working edges at the same time; pinning fixed the intermittent stalls.
+- A mobile share link has its own contract, separate from the Xray client JSON. The verified link carries exactly five XHTTP keys in `extra` (`scMaxEachPostBytes`, `scMinPostsIntervalMs`, `uplinkChunkSize`, `uplinkDataPlacement`, `uplinkHTTPMethod`), keeps `mode` at the top level of the link, renders `uplinkChunkSize` as a string, percent-encodes the blob twice, and omits `encryption` entirely for plain VLESS. A link that differs in any of these points imports and then never connects.
+- The lowest-risk credential change is a new UUID on the proven path, with every transport knob untouched. A second inbound is a second framing, and the framing is what mobile clients reject.
 - Selectel did not work: after a completed deployment its edge returned `403` for the resource's own `selcdn.net` name and `404` for the custom domain, and served a rotating fallback certificate. Its own FAQ says VPN and uncached dynamic proxy are unsupported.
 - Gcore failed on consumer sources: WebSocket handshakes reached the origin (`101`) but no application bytes flowed; datacenter sources worked. Treat this as an edge policy difference, not a client bug.
 - Xray's HTTP/1.1 XHTTP client can negotiate h2 via ALPN and then write HTTP/1.1 framing, producing a `malformed HTTP/1.x` failure. Do not force h1.
 - Attribution itself is a failure mode: this study initially blamed one provider for edge behavior that was actually served by another. Confirm the CNAME and the console before attributing any edge symptom.
+
+Verified in production on 2026-10-27 against a live Yandex edge and Xray 26.10.21:
+
+- The edge injected `X-CDN-Secret`, `/_cdn_secret_probe` through the CDN returned `204`, and a direct request to the origin without the header was closed by the gate. The gate is enforced.
+- XHTTP `packet-up` with GET/header uplink carried sessions through the edge. The residual failure rate was roughly half and was identical for the working profile and the new one, which places it in the edge and the upstream response rather than in the profile.
+- A VLESS user without an explicit `encryption` field makes a modern core refuse to start. The field must be present on every user, with the literal `none` for plain VLESS.
 
 Verified locally on 2026-10-26 against Xray 26.3.27 and nginx 1.26.3:
 
@@ -219,8 +244,7 @@ Verified locally on 2026-10-26 against Xray 26.3.27 and nginx 1.26.3:
 
 Not verified, and must not be presented as working:
 
-- That a Yandex edge actually injects `X-CDN-Secret` for a live resource. The control-plane feature is documented; the edge behavior was not exercised in this study. Prove it with `/_cdn_secret_probe` through the CDN before enforcing the gate.
-- `vlessenc` end to end through a Yandex edge, and support in every mobile client. Happ and v2RayTun bundle Xray-core and may work; sing-box-based clients such as Hiddify may not implement VLESS Encryption. Keep a `none` fallback profile until the target device is tested.
+- `vlessenc` on a mobile device. The encrypted profile was verified end to end from a desktop through a live edge, but it did not establish on the target phone while the plain-VLESS profile on the same path did. The cause was not isolated to the encryption itself: the two profiles also differed in the share-link shape, in the pinned edge, and in the inbound. Treat plain VLESS as the default and `vlessenc` as an unproven addition until a device test says otherwise. Happ and v2RayTun bundle Xray-core and may work; sing-box-based clients such as Hiddify may not implement VLESS Encryption at all.
 - `keepalive_requests 100000` under a long production soak. The directive is valid and the local test passed; the value is a tuning choice, not a measured optimum.
 
 - Yandex WebSocket: the edge did not pass an `Upgrade` in this study (0/20), and the provider enables the feature only through a support request. Not accepted as a working transport.

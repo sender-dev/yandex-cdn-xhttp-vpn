@@ -39,17 +39,28 @@ session, seq, keys  small         -> ~6.5 KiB
 
 Keep the total request headers below roughly 8 KiB. The nginx origin can accept 16 KiB (`client_header_buffer_size 16k`) and 64 KiB large buffers, but the CDN edge may have its own limit. A 16 KiB raw chunk becomes more than 21 KiB after base64 and will produce `431` or `400` at the edge or origin.
 
-Recommended values:
+Recommended values for a desktop client:
 
 ```json
 {
-  "uplinkChunkSize": "3000-4000",
-  "scMaxEachPostBytes": 8192,
+  "uplinkChunkSize": 4000,
+  "scMaxEachPostBytes": 32768,
   "scMaxBufferedPosts": 64,
-  "scMinPostsIntervalMs": 10,
-  "xPaddingBytes": "100-1000"
+  "scMinPostsIntervalMs": 10
 }
 ```
+
+`uplinkChunkSize` has two different representations, and mixing them is a
+classic source of "the profile imports but never connects":
+
+| Where | Representation | Why |
+|---|---|---|
+| Share-link `extra` blob | string, e.g. `"16384"` | The mobile importer models the field as a string and drops or rejects a number |
+| Xray client JSON | plain integer, e.g. `4000` | Cores that predate range parsing decode the field as `uint32` and abort with `cannot unmarshal string into Go struct field ...uplinkChunkSize of type uint32` |
+
+A range string such as `"3000-4000"` is accepted by recent cores and rejected
+by the older ones. `scripts/make-profile.py` therefore keeps the range out of
+the default presets and warns when one is requested.
 
 `scMaxEachPostBytes` is an upper bound for POST-mode chunks, not for GET/header uplink. With `uplinkHTTPMethod: GET` and `uplinkDataPlacement: header` it does not shape the request, but keep it consistent on both sides. `scMinPostsIntervalMs` prevents a tight POST loop and is irrelevant to GET/header as well; 10 ms is a reasonable floor if a POST mode is used. The proposal to set `scMaxEachPostBytes` to 500000–1000000 belongs to body/POST modes and contradicts a header budget.
 
@@ -58,6 +69,8 @@ Measured on loopback with Xray 26.3.27, `uplinkChunkSize: "3000-4000"`, and `xPa
 ## Encrypting the payload (vlessenc)
 
 Header placement base64-encodes the VLESS payload. Base64 is not encryption: without `vlessenc`, an observer on the edge-to-origin leg can decode the destination and the data. VLESS Encryption adds an authenticated record layer inside VLESS, so the bytes placed in `X-Data-*` are ciphertext before XHTTP frames them.
+
+**`vlessenc` is not the default for a mobile share link.** The key has to survive a trip through the mobile importer: it must carry a `encryption=` parameter, put it on the VLESS user, and keep the server inbound in `vlessenc` mode. Every one of those steps is a way to end up with a link that imports cleanly and then never establishes a session. The profile that was proven on a phone used plain VLESS with `encryption` absent from the link. Turn `vlessenc` on only after the plain path is stable and you have a device that can be tested, and keep the plain path as the fallback.
 
 Generate one pair on the origin:
 
@@ -95,53 +108,82 @@ Rules that prevent most failures:
 - The two strings must come from the same option in the same run. Mixing `decryption` from one option with `encryption` from another, or from a second run, fails to decrypt.
 - VLESS Encryption needs Xray-core 25.9.5 or newer. Older clients may ignore the field instead of failing at parse time, which looks like a stalled session.
 - Support is not universal. Happ and v2RayTun bundle Xray-core and may support it; sing-box-based clients such as Hiddify may not. Keep a matching `none`/`none` fallback profile during rollout.
+- A share link has to carry the client key as `encryption=<client-key>`. A mobile importer that does not model that parameter drops the key, the client then decrypts with `none`, and the server rejects the first packet.
 - The transport metadata stays visible: path, method, `X-Auth-Token`, `page`, and `X-Data` header names. Encryption hides the payload, not the shape.
 - Encrypt the 443 origin block too if it carries the tunnel; otherwise the plaintext path remains available.
 - Rotate by generating a new pair, updating server and client profiles together, then restarting Xray. The old client key stops working immediately.
 
 Local proof, not a field claim: with `vlessenc` enabled, a captured CDN-to-origin request contained no target hostname, URL path, or payload marker; `X-Data-0` was ciphertext. End-to-end behavior through a Yandex edge and support in the target mobile client still need a device test.
 
-## The full extra object
+## The extra object
 
-This is the hardened Yandex preset used by `make-profile.py --preset yandex-get` and by `edge-test.sh --preset yandex-get`. The same keys go at the top level of `xhttpSettings` in Xray JSON.
+`extra` is the XHTTP settings blob of a share link. Two shapes exist, and they
+are not interchangeable.
+
+### Mobile shape (field-verified)
+
+A mobile importer that was proven on a device models exactly five keys and
+nothing else:
 
 ```json
 {
-  "mode": "packet-up",
-  "uplinkHTTPMethod": "GET",
-  "uplinkDataPlacement": "header",
-  "uplinkDataKey": "X-Data",
-  "uplinkChunkSize": "3000-4000",
-  "scMaxEachPostBytes": 8192,
-  "scMaxBufferedPosts": 64,
+  "scMaxEachPostBytes": 32768,
   "scMinPostsIntervalMs": 10,
-  "sessionPlacement": "header",
-  "sessionKey": "X-Auth-Token",
-  "seqPlacement": "query",
-  "seqKey": "page",
-  "xPaddingKey": "_rupl",
-  "xPaddingHeader": "X-Cache",
-  "xPaddingPlacement": "queryInHeader",
-  "xPaddingMethod": "tokenish",
-  "xPaddingObfsMode": true,
-  "xPaddingBytes": "100-1000"
+  "uplinkChunkSize": "16384",
+  "uplinkDataPlacement": "header",
+  "uplinkHTTPMethod": "GET"
 }
 ```
 
-What the less obvious keys do:
+`scripts/make-profile.py --preset happ-parity` emits exactly this set. Notes on
+each point, because every one of them was a real difference between a link that
+imported and a link that did not:
 
-- `sessionPlacement` and `seqPlacement` decide where the session and packet sequence live. Moving the session into a header keeps it out of the URL path, which some edges filter less aggressively.
-- `sessionKey` is the header name that carries the session token when `sessionPlacement` is `header`. It must match between client and server.
-- `seqKey` (`page`) makes the request look like pagination rather than a tunnel.
-- `xPaddingHeader` (`X-Cache`) and `xPaddingMethod: tokenish` make padding look like cache metadata. `queryInHeader` splits the padding between query and header.
-- `xPaddingObfsMode` obfuscates the padding length. It costs a few bytes and is worth keeping.
-- `uplinkDataKey` is the header that carries the packet when placement is `header`.
+- `mode` is **not** part of `extra`. It is a top-level share-link parameter
+  (`?mode=packet-up`). A client that models only the five keys ignores an
+  `extra.mode`, and the transport silently falls back to its default mode.
+- `uplinkChunkSize` is a **string** in the share link. The importer models it
+  as text; a JSON number is dropped or refused.
+- `uplinkDataKey` is absent. The default header name `X-Data` is what the
+  client uses, and the server must therefore also use the default.
+- `scMaxBufferedPosts` is absent. It is a server-side knob.
+- Padding and session-placement keys (`xPadding*`, `sessionPlacement`,
+  `sessionKey`, `seqPlacement`, `seqKey`) are absent. A strict importer can
+  refuse a blob that carries keys it does not model.
+
+### Desktop shape
+
+`--preset yandex-get` is the richer set used for Xray client JSON and for
+scripts that build a config directly:
+
+```json
+{
+  "uplinkHTTPMethod": "GET",
+  "uplinkDataPlacement": "header",
+  "uplinkDataKey": "X-Data",
+  "uplinkChunkSize": 4000,
+  "scMaxEachPostBytes": 32768,
+  "scMaxBufferedPosts": 64,
+  "scMinPostsIntervalMs": 10
+}
+```
+
+These keys also go at the top level of `xhttpSettings` in Xray JSON.
+
+What the less obvious desktop keys do:
+
+- `uplinkDataKey` is the header that carries the packet when placement is
+  `header`. Leaving it out means the default `X-Data` on both ends.
+- `scMaxBufferedPosts` bounds how many uplink requests the server buffers
+  while waiting for the downstream side. Keep it identical on both ends.
 
 ## Server and client must match
 
 Every key above that affects framing or encoding must be identical on the inbound and the client, or explicitly left at the same default on both sides. The common failure is a client that only sets `mode`, `uplinkHTTPMethod`, and `uplinkDataPlacement` while the server uses custom session and sequence keys. The client falls back to defaults, the server cannot parse the session, and the result is a `404`, a `400`, or a session that establishes and then dies.
 
 Keep one source of truth: generate the client from a single preset, copy the same `xhttpSettings` block into the inbound, and run `xray run -test` on both. Inbound `mode` must be `packet-up` when header placement is used; `auto` plus `uplinkDataPlacement: header` is rejected at startup with "UplinkDataPlacement can be header only in packet-up mode".
+
+The safest way to add a second tunnel is to make the new inbound a **verbatim copy** of the proven one and change nothing but the path and the UUID. Every knob that differs is a candidate for the mismatch, and the cheapest way to find the culprit is to not introduce any. The parity inbound also keeps plain VLESS (`"decryption": "none"`) until the plain path is proven on the device.
 
 Xray silently ignores unknown key names. Validate, then inspect the parsed config:
 
@@ -156,13 +198,17 @@ If a key you wrote is absent from the dump, the running Xray does not implement 
 A VLESS share link for Happ, v2RayTun, or Hiddify:
 
 ```text
-vless://<UUID>@<ADDRESS>:443?encryption=none&security=tls&sni=<CDN_HOST>&fp=chrome&type=xhttp&host=<CDN_HOST>&path=%2Fapi-stream&mode=packet-up&extra=<URL-ENCODED-JSON>#<LABEL>
+vless://<UUID>@<ADDRESS>:443?security=tls&sni=<CDN_HOST>&fp=chrome&type=xhttp&host=<CDN_HOST>&path=%2Fapi-stream&mode=packet-up&extra=<ENCODED-JSON>#<LABEL>
 ```
 
-With `vlessenc`, `encryption` carries the client key instead of `none`:
+`encryption` is **absent** for plain VLESS. A link that carries
+`encryption=none` is accepted by some importers and refused by others, so the
+generator omits the parameter entirely when the transport is plain.
+
+With `vlessenc`, `encryption` carries the client key instead:
 
 ```text
-vless://<UUID>@<ADDRESS>:443?encryption=mlkem768x25519plus.native.600s.<CLIENT_KEY>&security=tls&sni=<CDN_HOST>&fp=chrome&type=xhttp&host=<CDN_HOST>&path=%2Fapi-stream&mode=packet-up&extra=<URL-ENCODED-JSON>#<LABEL>
+vless://<UUID>@<ADDRESS>:443?encryption=mlkem768x25519plus.native.600s.<CLIENT_KEY>&security=tls&sni=<CDN_HOST>&fp=chrome&type=xhttp&host=<CDN_HOST>&path=%2Fapi-stream&mode=packet-up&extra=<ENCODED-JSON>#<LABEL>
 ```
 
 `scripts/make-profile.py --vless-encryption "$CLIENT_KEY"` writes exactly this. The key is sensitive: it decrypts the tunnel, so keep it out of the share link you paste into chats, tickets, or public repos.
@@ -177,18 +223,46 @@ Field meanings:
 | `sni` | The CDN hostname; must match the certificate |
 | `host` | The HTTP Host header; usually the same as SNI |
 | `path` | The tunnel path, URL-encoded (`/api-stream` becomes `%2Fapi-stream`) |
-| `mode` | `packet-up` |
-| `encryption` | `none`, or the client key from `xray vlessenc` when the inbound uses `decryption` |
-| `extra` | One URL-encoded JSON object containing the XHTTP settings, at the top level |
+| `mode` | `packet-up`, at the top level and never inside `extra` |
+| `encryption` | Present only with `vlessenc`; omitted for plain VLESS |
+| `extra` | The XHTTP settings blob, keys at the top level |
 | `fp` | `chrome` is the tested fingerprint |
 
 The nesting trap: `extra` must contain the XHTTP keys directly. Putting them under `extra.xhttpSettings` leaves the effective `extra` empty, the client uses defaults, and the server sees a different framing. The generator in `scripts/make-profile.py` does this correctly.
 
-Do not add `serverMaxHeaderBytes` to the share link. It belongs in the inbound JSON. If a client rejects an unknown key, remove optional padding keys first and keep the framing keys.
+### How the extra blob is encoded
+
+A mobile share link encodes `extra` **twice**: the JSON is percent-encoded once when it is placed in the query string, and the whole URI is percent-encoded once more by whoever produces the link. In the raw text of the URI that shows up as `%257B` for the opening brace. A link that carries only one layer decodes to a string of `%7B...` and the importer parses nothing.
+
+The percent-encoding follows the character set that mobile clients use, which is the unreserved set plus `-._~!$&'()*+,;=:@/?`. Colons and commas stay literal, a double quote becomes `%22`, a space becomes `%20`.
+
+The JSON inside is pretty-printed the way mobile clients pretty-print it: a space on both sides of the colon, a two-space indent, and a newline before the closing brace.
+
+```text
+{
+  "scMaxEachPostBytes" : 32768,
+  "scMinPostsIntervalMs" : 10,
+  "uplinkChunkSize" : "16384",
+  "uplinkDataPlacement" : "header",
+  "uplinkHTTPMethod" : "GET"
+}
+```
+
+Whitespace differences matter here: `"key": value` and `"key" : value` are
+different strings, and an importer that compares the blob literally will
+reject one of them. `scripts/make-profile.py` reproduces this format and the
+test suite compares the generated blob byte for byte against a link that was
+proven on a phone.
+
+`--extra-encoding plain` writes the blob with a single layer of encoding, for
+clients that expect the plain form.
+
+Do not add `serverMaxHeaderBytes` to the share link. It belongs in the inbound JSON. If a client rejects an unknown key, remove optional keys first and keep the framing keys.
+
 
 ## Xray client JSON
 
-The equivalent outbound:
+The equivalent outbound, matching the mobile shape:
 
 ```json
 {
@@ -197,7 +271,7 @@ The equivalent outbound:
     "vnext": [{
       "address": "198.51.100.20",
       "port": 443,
-      "users": [{ "id": "<UUID>", "encryption": "<CLIENT_KEY>" }]
+      "users": [{ "id": "<UUID>", "encryption": "none" }]
     }]
   },
   "streamSettings": {
@@ -210,37 +284,35 @@ The equivalent outbound:
       "mode": "packet-up",
       "uplinkHTTPMethod": "GET",
       "uplinkDataPlacement": "header",
-      "uplinkDataKey": "X-Data",
-      "uplinkChunkSize": "3000-4000",
-      "scMaxEachPostBytes": 8192,
-      "scMaxBufferedPosts": 64,
-      "scMinPostsIntervalMs": 10,
-      "sessionPlacement": "header",
-      "sessionKey": "X-Auth-Token",
-      "seqPlacement": "query",
-      "seqKey": "page",
-      "xPaddingKey": "_rupl",
-      "xPaddingHeader": "X-Cache",
-      "xPaddingPlacement": "queryInHeader",
-      "xPaddingMethod": "tokenish",
-      "xPaddingObfsMode": true,
-      "xPaddingBytes": "100-1000",
-      "xmux": {
-        "maxConcurrency": "0",
-        "maxConnections": "4-8",
-        "cMaxReuseTimes": "0",
-        "hMaxRequestTimes": "300-600",
-        "hMaxReusableSecs": "900-1800",
-        "hKeepAlivePeriod": 0
-      }
+      "uplinkChunkSize": 16384,
+      "scMaxEachPostBytes": 32768,
+      "scMinPostsIntervalMs": 10
     }
   }
 }
 ```
 
-`users[].encryption` is the client half of `vlessenc`; set it to the key from `xray vlessenc` or leave it as `none` when the inbound has no `decryption`. The inbound side has no `encryption` field at all.
+`users[].encryption` must always be present, even for plain VLESS. Recent
+Xray-core versions refuse to start without it and print:
 
-`xmux` keeps a small pool of reusable connections. Do not set both `maxConcurrency` and `maxConnections` to positive values: `xray run -test` may accept the pair, but the connection fails when it is used. The Yandex preset uses connections, not concurrency.
+```text
+VLESS users: please add/set "encryption":"none" for every user
+```
+
+Set it to the client key from `xray vlessenc` when the inbound has a
+`decryption`, and to the literal `none` otherwise. The inbound side never has
+an `encryption` field.
+
+`uplinkChunkSize` is a plain integer here, unlike in the share link, so that
+older cores can decode it.
+
+`xmux` keeps a small pool of reusable connections. Do not set both
+`maxConcurrency` and `maxConnections` to positive values: `xray run -test` may
+accept the pair, but the connection fails when it is used. The desktop preset
+uses connections, not concurrency. The `happ-parity` preset omits `xmux`
+entirely: the profile that was proven on a phone used a single connection, and
+multiplexing only adds failure modes behind a CDN edge.
+
 
 ## TLS and ALPN
 
