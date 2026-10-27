@@ -29,7 +29,17 @@
           "scMaxEachPostBytes": 32768,
           "scMaxBufferedPosts": 30,
           "scMinPostsIntervalMs": 10,
-          "serverMaxHeaderBytes": 65536
+          "scStreamUpServerSecs": "20-80",
+          "serverMaxHeaderBytes": 65536,
+          "enableXmux": true,
+          "xmux": {
+            "cMaxReuseTimes": 0,
+            "hKeepAlivePeriod": 0,
+            "hMaxRequestTimes": "600-900",
+            "hMaxReusableSecs": "1800-3000",
+            "maxConcurrency": "16"
+          },
+          "xPaddingObfsMode": false
         }
       }
     },

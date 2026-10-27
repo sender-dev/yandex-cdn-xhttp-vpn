@@ -17,6 +17,33 @@ DD_TRACE_ENABLED=0 DD_CIVISIBILITY_ENABLED=0 \
 
 bash tests/secret-scan.sh
 
+python3 - <<'PY'
+import json
+
+for asset in ("assets/xray-inbound.example.json", "assets/xray-inbound-cascade.example.json"):
+    with open(asset, encoding="utf-8") as stream:
+        data = json.load(stream)
+    cdn = next(inbound for inbound in data["inbounds"] if inbound["tag"] == "cdn-xhttp")
+    settings = cdn["streamSettings"]["xhttpSettings"]
+    assert settings["mode"] == "packet-up", (asset, settings)
+    assert settings["uplinkHTTPMethod"] == "GET", (asset, settings)
+    assert settings["uplinkDataPlacement"] == "header", (asset, settings)
+    assert int(settings["uplinkChunkSize"]) == 16384, (asset, settings)
+    assert settings["scMaxEachPostBytes"] == 32768, (asset, settings)
+    assert settings["scMinPostsIntervalMs"] == 10, (asset, settings)
+    assert settings["serverMaxHeaderBytes"] == 65536, (asset, settings)
+    assert settings["enableXmux"] is True, (asset, settings)
+    assert settings["scStreamUpServerSecs"] == "20-80", (asset, settings)
+    assert settings["xPaddingObfsMode"] is False, (asset, settings)
+    xmux = settings["xmux"]
+    assert xmux["maxConcurrency"] == "16", (asset, xmux)
+    assert xmux["hMaxRequestTimes"] == "600-900", (asset, xmux)
+    assert xmux["hMaxReusableSecs"] == "1800-3000", (asset, xmux)
+    assert xmux["cMaxReuseTimes"] == 0, (asset, xmux)
+    assert xmux["hKeepAlivePeriod"] == 0, (asset, xmux)
+PY
+echo "asset framing: ok (parity set on both inbound examples)"
+
 if command -v xray >/dev/null 2>&1; then
     tmp=$(mktemp -d "${TMPDIR:-/tmp}/xhttp-test.XXXXXX")
     trap 'rm -rf "$tmp"' EXIT
