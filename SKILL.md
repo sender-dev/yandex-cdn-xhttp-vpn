@@ -1,7 +1,7 @@
 ---
 name: yandex-cdn-xhttp-vpn
 version: 2.0.0
-description: Build, debug, and audit a VLESS/XHTTP tunnel carried through a CDN edge when the direct path is blocked or throttled — Yandex Cloud CDN is field-verified; Selectel, Gcore, VK, Timeweb, and Beget notes are included. Covers the hardened origin profile: GET/header uplink, X-CDN-Secret origin authentication, nginx keepalive tuning, and native VLESS Encryption (vlessenc). Use when the user mentions VPN через CDN, XHTTP packet-up, белые списки МТС, обход блокировок через CDN, Yandex Cloud CDN resource, pinning a live edge IP, CDN edge flapping or 20–35% timeouts, 403/405/413/431 at a CDN edge, nginx origin for XHTTP, VLESS share links for Happ/v2RayTun/Hiddify, or asks to plan or review such a deployment — even when no provider is named.
+description: Build, debug, and audit a VLESS/XHTTP tunnel carried through a CDN edge when the direct path is blocked or throttled — Yandex Cloud CDN is field-verified; Selectel, Gcore, VK, Timeweb, and Beget notes are included. Covers the hardened origin profile — GET/header uplink, X-CDN-Secret origin authentication, nginx keepalive tuning, and native VLESS Encryption (vlessenc). Use when the user mentions VPN через CDN, XHTTP packet-up, белые списки МТС, обход блокировок через CDN, Yandex Cloud CDN resource, pinning a live edge IP, CDN edge flapping or 20–35% timeouts, 403/405/413/431 at a CDN edge, nginx origin for XHTTP, VLESS share links for Happ/v2RayTun/Hiddify, or asks to plan or review such a deployment — even when no provider is named.
 license: MIT
 compatibility: Linux or macOS with bash, curl, dig, python3, and Xray-core on PATH. VLESS Encryption needs Xray-core 25.9.5 or newer. Provider console and DNS access are required for setup.
 ---
