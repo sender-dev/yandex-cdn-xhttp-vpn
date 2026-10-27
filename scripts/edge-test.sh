@@ -19,7 +19,7 @@ ATTEMPTS="5"
 URL="https://api.telegram.org/"
 EXPECT="302"
 TIMEOUT="12"
-PRESET="yandex-get"
+PRESET="happ-parity"
 VLESS_ENCRYPTION=${VLESS_ENCRYPTION:-}
 EDGE_PORT="443"
 JSON=0
@@ -43,7 +43,7 @@ Options:
   --url <url>           Test URL (default https://api.telegram.org/)
   --expect <code|any>   Expected HTTP status (default 302; 'any' accepts 2xx/3xx)
   --timeout <seconds>   Per-request timeout (default 12)
-  --preset <name>       yandex-get or minimal (default yandex-get)
+  --preset <name>       happ-parity, yandex-get or minimal (default happ-parity)
   --vless-encryption <key>  Client key from `xray vlessenc`; `none` (default)
   --edge-port <n>       TLS port on the edge (default 443)
   --json                Machine-readable summary

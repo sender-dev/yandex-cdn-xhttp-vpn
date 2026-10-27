@@ -12,9 +12,8 @@ import os
 import re
 import stat
 import sys
-from urllib.parse import quote, urlencode
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -28,36 +27,52 @@ HOST_RE = re.compile(
 )
 ADDRESS_RE = re.compile(r"^[a-zA-Z0-9._:-]+$")
 
+# Characters a mobile share-link client leaves untouched when it percent-encodes
+# a value. Colons and commas stay literal, which is what such clients emit.
+URL_QUERY_ALLOWED = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    "-._~!$&'()*+,;=:@/?"
+)
+
 PRESETS = {
+    # Field-verified shape: the exact XHTTP knobs a real phone client accepted
+    # and a real CDN origin accepted. Keep this preset free of keys the client
+    # does not model (uplinkDataKey, scMaxBufferedPosts) and of client-only
+    # tuning (xmux): every extra key is one more thing a strict importer can
+    # reject. `mode` is a top-level share-link field, never part of `extra`.
+    "happ-parity": {
+        "scMaxEachPostBytes": 32768,
+        "scMinPostsIntervalMs": 10,
+        "uplinkChunkSize": 16384,
+        "uplinkDataPlacement": "header",
+        "uplinkHTTPMethod": "GET",
+    },
     "yandex-get": {
-        "mode": "packet-up",
         "uplinkHTTPMethod": "GET",
         "uplinkDataPlacement": "header",
         "uplinkDataKey": "X-Data",
-        "uplinkChunkSize": "3000-4000",
-        "scMaxEachPostBytes": 8192,
+        "uplinkChunkSize": 4000,
+        "scMaxEachPostBytes": 32768,
         "scMaxBufferedPosts": 64,
         "scMinPostsIntervalMs": 10,
-        "sessionPlacement": "header",
-        "sessionKey": "X-Auth-Token",
-        "seqPlacement": "query",
-        "seqKey": "page",
-        "xPaddingKey": "_rupl",
-        "xPaddingHeader": "X-Cache",
-        "xPaddingPlacement": "queryInHeader",
-        "xPaddingMethod": "tokenish",
-        "xPaddingObfsMode": True,
-        "xPaddingBytes": "100-1000",
     },
     "minimal": {
-        "mode": "packet-up",
         "uplinkHTTPMethod": "GET",
         "uplinkDataPlacement": "header",
-        "uplinkChunkSize": "3000-4000",
-        "scMaxEachPostBytes": 8192,
+        "uplinkChunkSize": 4000,
+        "scMaxEachPostBytes": 32768,
         "scMaxBufferedPosts": 64,
         "scMinPostsIntervalMs": 10,
     },
+}
+
+# Client-side HTTP/2 multiplexing is off by default: a single connection is
+# what the verified profile used, and extra multiplexing only adds failure
+# modes behind a CDN edge.
+PRESET_CLIENT_XMUX = {
+    "happ-parity": False,
+    "yandex-get": True,
+    "minimal": True,
 }
 
 XMUX = {
@@ -162,11 +177,78 @@ def preset(name):
     return dict(PRESETS[name])
 
 
-def build_uri(address, sni, host, path, port, uuid, label, xhttp, encryption="none"):
-    extra = json.dumps(xhttp, separators=(",", ":"), sort_keys=True)
-    query = urlencode(
+def percent_encode(value):
+    """Percent-encode a value the way mobile share-link clients do."""
+    encoded = []
+    for char in str(value):
+        if char in URL_QUERY_ALLOWED:
+            encoded.append(char)
+        else:
+            encoded.extend("%%%02X" % byte for byte in char.encode("utf-8"))
+    return "".join(encoded)
+
+
+def encode_json_like_apple(value, depth=0):
+    """Pretty-print JSON the way Apple's JSONSerialization does.
+
+    Apple puts a space on both sides of the colon and indents with two
+    spaces. Share-link clients that build their own `extra` blob use this
+    format, so reproducing it keeps generated links byte-comparable with a
+    link that was proven on a device.
+    """
+    pad = "  " * depth
+    inner_pad = "  " * (depth + 1)
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        entries = [
+            "%s%s : %s" % (inner_pad, json.dumps(key), encode_json_like_apple(item, depth + 1))
+            for key, item in value.items()
+        ]
+        return "{\n" + ",\n".join(entries) + "\n" + pad + "}"
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        entries = [
+            "%s%s" % (inner_pad, encode_json_like_apple(item, depth + 1))
+            for item in value
+        ]
+        return "[\n" + ",\n".join(entries) + "\n" + pad + "]"
+    return json.dumps(value)
+
+
+def build_extra(xhttp, encoding="happ"):
+    """Render the `extra` blob of a share link.
+
+    Share-link clients model `uplinkChunkSize` as a string, so it is rendered
+    as a string here even though the Xray client config wants a number.
+    """
+    payload = dict(xhttp)
+    if "uplinkChunkSize" in payload:
+        payload["uplinkChunkSize"] = str(payload["uplinkChunkSize"])
+    inner = encode_json_like_apple(payload)
+    if encoding == "plain":
+        return inner
+    return percent_encode(inner)
+
+
+def build_uri(
+    address,
+    sni,
+    host,
+    path,
+    port,
+    uuid,
+    label,
+    xhttp,
+    encryption="none",
+    extra_encoding="happ",
+):
+    params = []
+    if encryption and encryption != "none":
+        params.append(("encryption", encryption))
+    params.extend(
         [
-            ("encryption", encryption),
             ("security", "tls"),
             ("sni", sni),
             ("fp", "chrome"),
@@ -174,23 +256,31 @@ def build_uri(address, sni, host, path, port, uuid, label, xhttp, encryption="no
             ("host", host),
             ("path", path),
             ("mode", xhttp.get("mode", "packet-up")),
-            ("extra", extra),
-        ],
-        quote_via=quote,
-        safe="",
+            ("extra", build_extra(xhttp, extra_encoding)),
+        ]
     )
+    query = "&".join("%s=%s" % (key, percent_encode(value)) for key, value in params)
     uri_host = address if ":" not in address else "[" + address.strip("[]") + "]"
     return "vless://%s@%s:%d?%s#%s" % (
         uuid,
         uri_host,
         port,
         query,
-        quote(label, safe=""),
+        percent_encode(label),
     )
 
 
 def build_client_config(
-    address, sni, host, path, port, uuid, xhttp, socks_port, vless_encryption="none"
+    address,
+    sni,
+    host,
+    path,
+    port,
+    uuid,
+    xhttp,
+    socks_port,
+    vless_encryption="none",
+    include_xmux=True,
 ):
     settings = {
         "path": path,
@@ -199,7 +289,8 @@ def build_client_config(
     }
     for key, value in xhttp.items():
         settings[key] = value
-    settings["xmux"] = dict(XMUX)
+    if include_xmux:
+        settings["xmux"] = dict(XMUX)
     return {
         "log": {"loglevel": "warning"},
         "inbounds": [
@@ -219,7 +310,10 @@ def build_client_config(
                             "address": address,
                             "port": port,
                             "users": [
-                                {"id": uuid, "encryption": vless_encryption}
+                                {
+                                    "id": uuid,
+                                    "encryption": vless_encryption or "none",
+                                }
                             ],
                         }
                     ]
@@ -269,7 +363,14 @@ def parse_args(argv=None):
     parser.add_argument("--port", type=int, default=443)
     parser.add_argument("--uuid")
     parser.add_argument("--uuid-file")
-    parser.add_argument("--preset", default="yandex-get", choices=sorted(PRESETS))
+    parser.add_argument("--preset", default="happ-parity", choices=sorted(PRESETS))
+    parser.add_argument(
+        "--extra-encoding",
+        default="happ",
+        choices=("happ", "plain"),
+        help="how the `extra` blob is percent-encoded: 'happ' matches mobile "
+        "share-link clients (encoded twice), 'plain' encodes it once",
+    )
     parser.add_argument(
         "--chunk-size",
         help="override uplinkChunkSize: an integer (e.g. 4000) or a range "
@@ -308,9 +409,26 @@ def main(argv=None):
     )
     xhttp = preset(args.preset)
     if args.chunk_size:
-        xhttp["uplinkChunkSize"] = validate_chunk_size(args.chunk_size)
+        chunk_size = validate_chunk_size(args.chunk_size)
+        if isinstance(chunk_size, str):
+            print(
+                "warning: a chunk-size range is rejected by client cores that "
+                "decode uplinkChunkSize as uint32 (Xray <= 26.2.x); use a "
+                "plain integer for older phones",
+                file=sys.stderr,
+            )
+        xhttp["uplinkChunkSize"] = chunk_size
     uri = build_uri(
-        address, sni, host, path, args.port, uuid, args.name, xhttp, vless_encryption
+        address,
+        sni,
+        host,
+        path,
+        args.port,
+        uuid,
+        args.name,
+        xhttp,
+        vless_encryption,
+        args.extra_encoding,
     )
 
     if args.out == "-":
@@ -324,8 +442,16 @@ def main(argv=None):
 
     if args.client_config:
         config = build_client_config(
-            address, sni, host, path, args.port, uuid, xhttp, args.socks_port,
+            address,
+            sni,
+            host,
+            path,
+            args.port,
+            uuid,
+            xhttp,
+            args.socks_port,
             vless_encryption,
+            include_xmux=PRESET_CLIENT_XMUX.get(args.preset, False),
         )
         write_private(args.client_config, json.dumps(config, indent=2, sort_keys=True))
         if not args.quiet:
@@ -344,6 +470,7 @@ def main(argv=None):
                     "path": path,
                     "port": args.port,
                     "preset": args.preset,
+                    "extra_encoding": args.extra_encoding,
                     "vless_encryption_enabled": vless_encryption != "none",
                     "uri_written": bool(args.out),
                     "client_config_written": bool(args.client_config),

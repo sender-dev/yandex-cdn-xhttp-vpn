@@ -100,13 +100,14 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as stream:
     dump = json.load(stream)
 settings = dump["inbounds"][0]["streamSettings"]["xhttpSettings"]
-assert settings["sessionPlacement"] == "header", settings
-assert settings["sessionKey"] == "X-Auth-Token", settings
+assert settings["mode"] == "packet-up", settings
+assert settings["uplinkHTTPMethod"] == "GET", settings
+assert settings["uplinkDataPlacement"] == "header", settings
+assert settings["uplinkChunkSize"] == 16384, settings
+assert settings["scMaxEachPostBytes"] == 32768, settings
 assert "sessionIDPlacement" not in settings, settings
 assert "enableXmux" not in settings, settings
-assert dump["inbounds"][0]["settings"]["decryption"].startswith(
-    "mlkem768x25519plus."
-), dump["inbounds"][0]["settings"]
+assert dump["inbounds"][0]["settings"]["decryption"] == "none", dump["inbounds"][0]["settings"]
 PY
 
     python3 - "$tmp/inbound-single.json" "$private_key" "$decryption_key" <<'PY'
@@ -141,11 +142,14 @@ by_tag = {inbound.get("tag"): inbound for inbound in dump["inbounds"]}
 assert set(by_tag) == {"cdn-xhttp", "direct-reality"}, by_tag.keys()
 assert by_tag["direct-reality"]["port"] == 443, by_tag["direct-reality"]
 settings = by_tag["cdn-xhttp"]["streamSettings"]["xhttpSettings"]
-assert settings["sessionPlacement"] == "header", settings
-assert settings["sessionKey"] == "X-Auth-Token", settings
-assert by_tag["cdn-xhttp"]["settings"]["decryption"].startswith(
-    "mlkem768x25519plus."
-), by_tag["cdn-xhttp"]["settings"]
+assert settings["mode"] == "packet-up", settings
+assert settings["uplinkHTTPMethod"] == "GET", settings
+assert settings["uplinkDataPlacement"] == "header", settings
+assert settings["uplinkChunkSize"] == 16384, settings
+assert settings["scMaxEachPostBytes"] == 32768, settings
+assert "sessionIDPlacement" not in settings, settings
+assert "enableXmux" not in settings, settings
+assert by_tag["cdn-xhttp"]["settings"]["decryption"] == "none", by_tag["cdn-xhttp"]["settings"]
 tags = {outbound.get("tag") for outbound in dump["outbounds"]}
 assert tags == {"direct", "blocked"}, tags
 assert "cascade-reality" not in tags, tags
