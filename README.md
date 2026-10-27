@@ -13,7 +13,7 @@ Client (Happ / v2RayTun / Hiddify)
   -> TLS 443, address = pinned edge IP or CDN hostname, SNI = CDN hostname
   -> CDN edge
   -> origin :80 nginx (X-CDN-Secret required; 444 without it)
-  -> Xray VLESS/XHTTP inbound on 127.0.0.1 (vlessenc payload)
+  -> Xray VLESS/XHTTP inbound on 127.0.0.1 (plain VLESS; vlessenc optional)
   -> outbound freedom (the origin is also the exit)
   -> Internet
 ```
@@ -135,8 +135,9 @@ Verified locally on 2026-10-26 with Xray 26.3.27 and nginx 1.26.3:
 Verified in production on 2026-10-27 (Yandex Cloud CDN, Xray 26.10.21, nginx 1.26.3):
 
 - Single-server mode carried live sessions: the same host was CDN origin and exit, with the edge fetching origin over HTTP/80 and Xray routing to `freedom`.
+- The live CDN inbound runs plain VLESS with `"decryption": "none"`, and its parsed framing is identical to the shipped asset's apart from the path: same `xmux` limits, same `scStreamUpServerSecs`, same header budget.
 - A live edge injected the static `X-CDN-Secret` request header: `/_cdn_secret_probe` through the CDN returned `204` with `X-CDN-Secret-Seen: yes` while the same probe without the header returned `no`. The gate was enabled only after that signal.
-- `vlessenc` works end to end through a real edge: 10/10 XHTTP GET/header sessions on a verified edge. A client that omits the key against an encrypted inbound fails at the first packet.
+- `vlessenc` works end to end through a real edge: 10/10 XHTTP GET/header sessions on a verified edge. A client that omits the key against an encrypted inbound fails at the first packet. The CDN inbound later moved to plain VLESS with the framing unchanged, so the shipped asset uses `"decryption": "none"`.
 - Aggressive edge flapping persists after a resource change: during rollout, one edge still served the previous origin, one returned no response at all, and one carried 10/10 for the encrypted profile but 7–8/10 for an older xmux profile. Rank edges again after every origin switch.
 - Origin switching on the resource itself takes about 15 minutes to reach the edge fleet; `active: true` is not evidence of rollout. Distinguish origins by a response only the new one returns.
 - A resource update needs `origin-group create` in addition to `resource update`; a role can allow reading the group list and updating the resource without allowing `origin-group get`.

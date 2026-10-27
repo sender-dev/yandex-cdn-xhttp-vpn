@@ -107,7 +107,7 @@ Phone (Happ / v2RayTun / Hiddify)
   -> origin :80 nginx (plain HTTP in the tested resource)
        gate: no X-CDN-Secret -> 444
   -> Xray VLESS/XHTTP inbound on 127.0.0.1:9081
-       vlessenc hides the payload on the CDN->origin leg
+       plain VLESS by default; vlessenc optionally hides the payload
   -> outbound freedom (origin = exit)
   -> Internet
 ```

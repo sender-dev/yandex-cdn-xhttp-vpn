@@ -15,7 +15,7 @@ Client (Happ / v2RayTun / Hiddify)
   -> TLS 443, address = pinned edge IP or CDN hostname, SNI = CDN hostname
   -> CDN edge
   -> origin :80 nginx (CDN injects X-CDN-Secret; 444 without it)
-  -> Xray VLESS/XHTTP inbound on 127.0.0.1 (vlessenc payload)
+  -> Xray VLESS/XHTTP inbound on 127.0.0.1 (plain VLESS; vlessenc optional)
   -> outbound freedom (origin = exit)
   -> Internet
 ```
@@ -231,6 +231,7 @@ Verified in the October 2026 field work behind this skill:
 Verified in production on 2026-10-27 against a live Yandex edge and Xray 26.10.21:
 
 - The edge injected `X-CDN-Secret`, `/_cdn_secret_probe` through the CDN returned `204`, and a direct request to the origin without the header was closed by the gate. The gate is enforced.
+- The CDN inbound runs plain VLESS with `"decryption": "none"` and routes to `freedom`, so the origin is also the exit. Its parsed framing matches the shipped asset key for key apart from the path, including the `xmux` limits and `scStreamUpServerSecs`.
 - XHTTP `packet-up` with GET/header uplink carried sessions through the edge. The residual failure rate was roughly half and was identical for the working profile and the new one, which places it in the edge and the upstream response rather than in the profile.
 - A VLESS user without an explicit `encryption` field makes a modern core refuse to start. The field must be present on every user, with the literal `none` for plain VLESS.
 
