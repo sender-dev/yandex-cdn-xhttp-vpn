@@ -1,6 +1,6 @@
 # Single-server mode (origin = exit)
 
-The default deployment in [USAGE.md](../USAGE.md) runs origin and exit on one server: the CDN fetches the origin directly, and Xray routes the tunnel to `freedom`. A two-server variant keeps a separate exit behind a REALITY cascade for networks where the CDN cannot reach the foreign origin.
+The default deployment in [USAGE.md](../USAGE.md) runs origin and exit on one server: the CDN fetches the origin directly, and Xray routes the tunnel to `freedom`. A two-server variant keeps a separate exit behind a REALITY cascade for networks where the CDN cannot reach the exit server.
 
 Use this mode only after measuring that Yandex CDN edges can reach the origin reliably. A working two-server deployment is not evidence for that: the failing leg in a two-server setup is exactly the one single-server mode removes.
 
@@ -19,9 +19,11 @@ Direct profile, same server:
   Phone -> TLS/REALITY :443 (tag: direct-reality) -> outbound "direct"
 ```
 
-The configuration is [assets/xray-inbound.example.json](../assets/xray-inbound.example.json). It is the two-server example with the cascade removed: both inbounds route to `freedom`, and destinations in loopback, RFC1918, link-local, CGNAT, benchmark, and IPv6 ULA ranges are blocked so the tunnel cannot reach the server's LAN or metadata endpoints. The list uses explicit CIDRs rather than `geoip:private`, so Xray does not need `geoip.dat` next to the binary to load the config.
+The configuration is [assets/xray-inbound.example.json](../assets/xray-inbound.example.json). Both inbounds route to `freedom`, because this server is at once the origin and the exit, and destinations in loopback, RFC1918, link-local, CGNAT, benchmark, and IPv6 ULA ranges are blocked so the tunnel cannot reach the server's LAN or metadata endpoints. The list uses explicit CIDRs rather than `geoip:private`, so Xray does not need `geoip.dat` next to the binary to load the config.
 
 ## One server or two
+
+Single server is the default. The two-server cascade is the alternative: it costs a second host and earns its place only when the CDN cannot reach the exit.
 
 | | Single server (origin = exit) | Two servers (cascade) |
 |---|---|---|
@@ -29,10 +31,10 @@ The configuration is [assets/xray-inbound.example.json](../assets/xray-inbound.e
 | Cost and maintenance | One VPS | Two VPS |
 | CDN-to-origin leg | Crosses the border if the server is abroad, over plain HTTP/80 | Stays on the domestic origin; the border hop is REALITY |
 | Origin IP in the Yandex console | The exit IP | A domestic IP; the exit stays hidden |
-| Failure mode it survives | CDN edges can reach the foreign origin | CDN edges cannot reach the foreign origin, or the foreign subnet is filtered |
+| Failure mode it survives | CDN edges can reach the origin, which is also the exit | CDN edges cannot reach the origin, or the origin subnet is filtered |
 | Changing the exit | Rebuild or migrate the only server | Swap the cascade outbound |
 
-Choose single-server when the CDN reaches the foreign VPS on port 80 without `502`/`504` and without DPI interference, and when exposing that IP as the origin is acceptable. Keep the cascade when the foreign IP is unreachable from the CDN, when the plain-HTTP border hop is unacceptable, or when the exit must stay hidden.
+Choose single-server when the CDN reaches the VPS on port 80 without `502`/`504` and without DPI interference, and when exposing that IP as the origin is acceptable. Keep the cascade when the CDN cannot reach the exit server, when the plain-HTTP border hop is unacceptable, or when the exit IP must stay hidden.
 
 Single-server does not remove the border hop. It removes the domestic hop and makes the remaining one plain HTTP unless the origin serves TLS. `vlessenc` on the CDN inbound makes the payload ciphertext even though the request itself is plain HTTP; it is optional, and the profile that was verified on a phone used plain VLESS with `encryption` absent from the share link.
 

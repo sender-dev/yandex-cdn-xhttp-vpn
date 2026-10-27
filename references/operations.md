@@ -139,7 +139,7 @@ A weekly session check on the pinned edge and the domain fallback catches gradua
 
 ### Total outage
 
-1. Direct control through the same client and UUID. If it fails, fix the origin/cascade.
+1. Direct control through the same client and UUID. If it fails, fix the origin and the exit path.
 2. If direct works, test the domain profile and the pinned profile separately.
 3. Check DNS, certificate expiry, and resource status.
 4. Check the origin access log for the test window.
@@ -224,7 +224,7 @@ client reads them from a share link.
 
 A deployment is accepted only when all of these are true:
 
-- [ ] Direct origin/cascade control passes 10/10.
+- [ ] Direct origin control passes 10/10 (and the exit control as well, in two-server mode).
 - [ ] Direct origin without `X-CDN-Secret` returns `000` or `444`; with the header, the probe returns `204`.
 - [ ] `/_cdn_secret_probe` through the CDN returns `204`.
 - [ ] If `vlessenc` is enabled, the inbound has only `decryption`, the client only `encryption`, and a loopback or direct session passes.

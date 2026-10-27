@@ -443,7 +443,7 @@ What the log tells you:
 - No line for the attempt: the edge never routed it.
 - `$request_length` above zero: the client packet reached the origin.
 - `$bytes_sent` above zero: the origin answered.
-- `$request_time` near the timeout: the upstream or cascade stalled.
+- `$request_time` near the timeout: the upstream or the exit hop stalled.
 - Many reconnects in minutes: the client is fighting a stall; retries make edge anti-abuse more likely.
 
 If restrictions were not active, report "ordinary mobile connectivity", not "whitelist success".

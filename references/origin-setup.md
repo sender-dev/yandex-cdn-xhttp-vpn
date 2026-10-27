@@ -8,7 +8,7 @@ A simple layout that is easy to back up and roll back:
 
 ```text
 /etc/nginx/sites-enabled/cdn-origin.conf     # port 80 catch-all and optional 443 block
-/usr/local/etc/xray/config.json              # XHTTP inbound + REALITY cascade
+/usr/local/etc/xray/config.json              # XHTTP inbound + direct REALITY inbound
 /var/www/acme/                                # certbot webroot
 /root/vpn-cdn-backups/<UTC timestamp>/        # mode 700, files mode 600
 ~/.config/vpn-cdn/cdn-secret                  # CDN-to-origin shared secret, mode 600
@@ -187,7 +187,7 @@ Include every hostname the origin answers for in `server_name`, and expand the c
 
 ## Xray inbound
 
-The cascade inbound is VLESS with XHTTP, bound to loopback, routing to REALITY; its full example is [../assets/xray-inbound-cascade.example.json](../assets/xray-inbound-cascade.example.json). The default single-server example is [../assets/xray-inbound.example.json](../assets/xray-inbound.example.json). The essential shape:
+The CDN-facing inbound is VLESS with XHTTP, bound to loopback. In the default single-server mode it routes to `freedom`, because the origin is also the exit; its full example is [../assets/xray-inbound.example.json](../assets/xray-inbound.example.json). The two-server alternative keeps the same inbound and routes it to a REALITY outbound instead: [../assets/xray-inbound-cascade.example.json](../assets/xray-inbound-cascade.example.json). The essential shape is the same in both:
 
 ```json
 {
@@ -246,7 +246,7 @@ What to look for:
 - `200` with a small `$request_length` and a few kilobytes of `$bytes_sent` is a healthy short probe.
 - A long session shows repeated requests with data in `$request_length` and `$bytes_sent` above zero.
 - `101` in nginx is relayed upgrade behavior; for XHTTP you normally see `200` on the upstream requests.
-- `$request_time` near the proxy timeout means the upstream held the connection; check Xray and the cascade.
+- `$request_time` near the proxy timeout means the upstream held the connection; check Xray and the exit hop.
 
 Logs have second-level precision at best. For correlation, use unique paths or a nonce and record client timestamps in UTC.
 

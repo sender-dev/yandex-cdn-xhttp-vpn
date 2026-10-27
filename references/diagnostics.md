@@ -4,7 +4,7 @@ CDN failures are easy to misattribute because three layers look similar from the
 
 ## Evidence rules
 
-- **Run a control.** A direct-origin request through the same Xray client proves the client, UUID, cascade, and exit are healthy. If the control fails, stop testing the CDN.
+- **Run a control.** A direct-origin request through the same Xray client proves the client, UUID, and exit are healthy. If the control fails, stop testing the CDN.
 - **Use a clean vantage.** A workstation with a local proxy, fake-IP DNS, or a VPN tunnel does not measure the edge. Datacenter and consumer sources can receive different treatment from the same edge; test both when the phone fails.
 - **Use unique paths or nonces.** A cached response or a shared path cannot be attributed. Add a random query value to every short probe.
 - **Repeat.** One success is noise. Five attempts per edge, twenty for acceptance.
@@ -108,7 +108,7 @@ For each attempt, look for a line with the same path, method, and timestamp. The
 
 - `$request_length` above zero: the client packet reached the origin.
 - `$bytes_sent` above zero: the origin answered.
-- `$request_time` near the timeout: the upstream or cascade stalled.
+- `$request_time` near the timeout: the upstream (Xray) or the exit hop stalled.
 - No line: the edge never routed the request.
 
 For XHTTP sessions, a healthy flow shows repeated requests, not one. A session that handshakes and then sends nothing usually shows a `200` with a small request and no follow-up data.
@@ -160,7 +160,7 @@ On the phone, with Wi-Fi off:
 
 Stop and change the provider when all of these are true:
 
-- The origin and cascade pass the direct control.
+- The origin and the exit path pass the direct control.
 - Short probes pass through multiple edges.
 - Sessions stall or return `403` across edges and sources.
 - The provider's terms do not clearly permit the workload, or support cannot explain the edge behavior.
