@@ -186,6 +186,7 @@ Monitoring, edge rotation, secret rotation, and the incident runbook are in [ref
 | `405` on the uplink | Client uses POST or OPTIONS while the edge allows only GET | Set `uplinkHTTPMethod=GET` |
 | `413` on the uplink | Request body sent where the edge forbids it | Switch to header placement; remove the body |
 | `431` or `400` on large requests | Header chunk or padding too large | Lower `uplinkChunkSize`, raise nginx buffers |
+| Client aborts with `cannot unmarshal string into Go struct field ...uplinkChunkSize of type uint32` | The client core predates range parsing and wants a plain integer | Regenerate with `--chunk-size 4000`; keep the range string only for cores that accept it |
 | Empty reply or `444` through the CDN | The edge did not send `X-CDN-Secret`, or sent the wrong one | Read back `--static-request-headers`; test `/_cdn_secret_probe` through the CDN hostname |
 | Direct origin request returns `444` (expected) | The gate is working; the origin is not meant to be public | Test through the CDN, not by IP |
 | First packet fails right after enabling `vlessenc` | Client and server keys swapped or mismatched; old client core | Server gets `decryption`, client gets `encryption`; both from the same `xray vlessenc` run |

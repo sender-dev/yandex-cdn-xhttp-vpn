@@ -108,6 +108,8 @@ bash scripts/edge-test.sh \
 
 Add `--vless-encryption "$client_key"` to the profile and test commands when the inbound uses a `vlessenc` decryption key. Omitting it against an encrypted inbound makes the first packet fail.
 
+Add `--chunk-size 4000` when the importing client fails with `cannot unmarshal string into Go struct field ...uplinkChunkSize of type uint32`. The preset emits a `3000-4000` range, which newer cores accept and older ones reject; an integer works on both. A profile built with `minimal` will not talk to an inbound that expects `sessionPlacement`/padding keys — keep the full preset and change only the chunk.
+
 `edge-test.sh` exits `0` for `LIVE`, `1` for `PARTIAL`, `2` for a setup error, and `3` for `DEAD`. Use `--dry-run` to validate the generated Xray config without sending traffic, and `--json` for machine-readable output.
 
 ## What is verified, and what is not
