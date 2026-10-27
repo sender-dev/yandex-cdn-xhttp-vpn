@@ -68,7 +68,7 @@ import json
 import sys
 
 path, private, public, decryption = sys.argv[1:5]
-with open("assets/xray-inbound.example.json", encoding="utf-8") as stream:
+with open("assets/xray-inbound-cascade.example.json", encoding="utf-8") as stream:
     data = json.load(stream)
 for inbound in data["inbounds"]:
     settings = inbound.get("settings", {})
@@ -114,7 +114,7 @@ import json
 import sys
 
 path, private, decryption = sys.argv[1:4]
-with open("assets/xray-inbound-single.example.json", encoding="utf-8") as stream:
+with open("assets/xray-inbound.example.json", encoding="utf-8") as stream:
     data = json.load(stream)
 for inbound in data["inbounds"]:
     settings = inbound.get("settings", {})
@@ -155,7 +155,7 @@ for rule in dump["routing"]["rules"]:
         routed[tag] = rule.get("outboundTag")
 assert routed == {"cdn-xhttp": "direct", "direct-reality": "direct"}, routed
 PY
-    echo "xray config: ok (client + vlessenc + cascade and single-server inbounds)"
+    echo "xray config: ok (client + vlessenc + single-server and cascade inbounds)"
 else
     echo "xray config: skipped (xray not on PATH)"
 fi

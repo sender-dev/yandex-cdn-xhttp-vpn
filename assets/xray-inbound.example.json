@@ -47,7 +47,7 @@
     {
       "tag": "direct-reality",
       "listen": "0.0.0.0",
-      "port": 8443,
+      "port": 443,
       "protocol": "vless",
       "settings": {
         "clients": [
@@ -76,55 +76,38 @@
   ],
   "outbounds": [
     {
-      "tag": "cascade-reality",
-      "protocol": "vless",
-      "settings": {
-        "vnext": [
-          {
-            "address": "<EXIT_HOST>",
-            "port": 8443,
-            "users": [
-              {
-                "id": "00000000-0000-4000-8000-000000000002",
-                "flow": "xtls-rprx-vision",
-                "encryption": "none"
-              }
-            ]
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "serverName": "www.example.com",
-          "fingerprint": "chrome",
-          "publicKey": "<REALITY_PUBLIC_KEY>",
-          "shortId": "<SHORT_ID>"
-        }
-      }
-    },
-    {
       "tag": "direct",
       "protocol": "freedom"
     },
     {
-      "tag": "block",
+      "tag": "blocked",
       "protocol": "blackhole"
     }
   ],
   "routing": {
+    "domainStrategy": "IPIfNonMatch",
     "rules": [
       {
         "type": "field",
-        "inboundTag": [
-          "cdn-xhttp"
+        "ip": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "198.18.0.0/15",
+          "::1/128",
+          "fc00::/7",
+          "fe80::/10"
         ],
-        "outboundTag": "cascade-reality"
+        "outboundTag": "blocked"
       },
       {
         "type": "field",
         "inboundTag": [
+          "cdn-xhttp",
           "direct-reality"
         ],
         "outboundTag": "direct"
