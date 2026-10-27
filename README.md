@@ -59,6 +59,8 @@ npx skills add sender-dev/yandex-cdn-xhttp-vpn
 
 `bunx skills add ...`, `npm exec skills add ...`, and `pnpm dlx skills add ...` are equivalent. Requires Node.js 22.20 or later. The CLI sends anonymous telemetry by default; set `DISABLE_TELEMETRY=1` to opt out.
 
+The CLI parses the `SKILL.md` frontmatter with a strict YAML parser, so a value that contains `": "` must be quoted or reworded; an unquoted one is read as a nested mapping and the skill is skipped with a parse error. `tests/test_skill_frontmatter.py` guards that.
+
 Install from a clone instead:
 
 ```bash
@@ -143,6 +145,7 @@ Verified in production on 2026-10-27 (Yandex Cloud CDN, Xray 26.10.21, nginx 1.2
 - A resource update needs `origin-group create` in addition to `resource update`; a role can allow reading the group list and updating the resource without allowing `origin-group get`.
 - A mobile share link is not the same artifact as the Xray client JSON. The verified link's `extra` blob has exactly five keys, renders `uplinkChunkSize` as a string, is percent-encoded twice, and keeps `mode` at the top level. A blob that differs in key set, value type, JSON whitespace, or encoding depth imports and then never connects.
 - A new credential is safest as a new UUID on the proven path, with the inbound copied verbatim. The tunnel framing is what mobile clients reject, not the UUID.
+- The edge carries a multi-megabyte body only while it stays under about a minute. Through one edge, 3 of 6 attempts returned all 15.8 MB of a registry document in 1.9–7.0 s, and 3 attempts stalled at ~257 KB/s and were cut at 61–62 s, 2 KB to 16 KB short, still with status `200`; the same body straight to the origin arrived complete in 1.8–3.3 s at 4.8–8.7 MB/s with the identical framing. The truncation is on the edge-to-client leg, not in the origin or the tunnel.
 
 Not verified, and not claimed:
 

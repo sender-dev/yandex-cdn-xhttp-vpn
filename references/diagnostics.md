@@ -113,7 +113,28 @@ For each attempt, look for a line with the same path, method, and timestamp. The
 
 For XHTTP sessions, a healthy flow shows repeated requests, not one. A session that handshakes and then sends nothing usually shows a `200` with a small request and no follow-up data.
 
-### 8. Real device
+### 8. Large transfer
+
+A session test proves that the tunnel carries a flow; it does not prove that the edge carries a long response. Test one multi-megabyte body through the edge and once directly to the origin, and compare both the byte count and the duration.
+
+```bash
+curl -sS --socks5-hostname 127.0.0.1:11096 -o /dev/null \
+  -w "HTTP %{http_code} size=%{size_download} time=%{time_total}s speed=%{speed_download}B/s\n" \
+  --max-time 120 https://registry.npmjs.org/typescript
+```
+
+Measured on Yandex Cloud CDN on 2026-10-27, with the same XHTTP framing, the same origin, and the same client, only the CDN leg added:
+
+| Path | Result |
+|---|---|
+| Through the edge | 3 of 6 attempts returned the full 15.8 MB in 1.9-7.0 s; 3 attempts stalled at ~257 KB/s and stopped at 61-62 s, 2 KB to 16 KB short, still with status `200` |
+| Straight to the origin, CDN bypassed | 3 of 3 attempts returned all 15,856,780 bytes in 1.8-3.3 s at 4.8-8.7 MB/s |
+
+So the origin, the exit, and the XHTTP framing all carry a large body. The truncation is on the edge-to-client leg, and its signature is a transfer that runs past a fixed minute and is then cut at the tail while the status stays `200`. A client that checks the length reports `ECONNRESET` or `Invalid response body` even though the origin log shows a complete `200`.
+
+Practical consequence: a package manager over the tunnel works for ordinary packages, and a large registry document or tarball may arrive truncated. Retry it, and use the direct profile for bulk downloads. Do not conclude from a truncated download that the origin or the tunnel is broken.
+
+### 9. Real device
 
 On the phone, with Wi-Fi off:
 
@@ -155,6 +176,7 @@ On the phone, with Wi-Fi off:
 - `XTLS rejected UDP/443` for Apple destinations: expected for Apple services that use UDP; it is not evidence that Telegram failed. Telegram messaging uses TCP.
 - A TCP connect to a Telegram DC succeeds but the message does not arrive: TCP reachability is not delivery; check the return path and the app state.
 - Hundreds of reconnects in minutes: the client is retrying a stalled path; reduce concurrency and fix the stall before the edge treats it as abuse.
+- A multi-megabyte body arrives a few kilobytes short with status `200`, and the transfer took about a minute: the edge cut the response at its own time limit. The origin log shows the complete body, so the origin and the tunnel are not at fault.
 
 ## When to stop
 
