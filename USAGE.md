@@ -2,7 +2,7 @@
 
 This guide describes the setup that was actually deployed and accepted: a VLESS/XHTTP tunnel through Yandex Cloud CDN, with the uplink carried in GET headers, accepted from an MTS SIM during an active restriction window in October 2026. It covers both ways of working: handing the task to an agent that has this skill, and doing the deployment by hand.
 
-Version 2 adds the hardened origin profile. The base GET/header deployment is field-verified. The secret gate, keepalive tuning, and `vlessenc` were validated locally against Xray 26.3.27 and nginx 1.26.3 (config validation, Docker nginx tests, a loopback GET/header session, and a captured CDN-to-origin frame) but not yet against a live Yandex edge or the target phone. Treat those three as supported and tested in isolation, not as field-proven together; [README.md](README.md) keeps the exact split.
+Version 2 adds the hardened origin profile. The base GET/header deployment is field-verified. The secret gate, keepalive tuning, and `vlessenc` were validated locally against Xray 26.3.27 and nginx 1.26.3, then in production on 2026-10-27 against Xray 26.10.21 and a live Yandex edge: the edge injected `X-CDN-Secret`, the gate closed direct scans, and `vlessenc` carried 10/10 sessions. The phone acceptance on the target SIM is still the step that proves the mobile path; [README.md](README.md) keeps the exact split.
 
 Everything below uses placeholders. Replace them with your own values and keep the real ones out of commits, tickets, and chat:
 

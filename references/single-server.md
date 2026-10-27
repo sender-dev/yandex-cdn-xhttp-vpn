@@ -50,6 +50,18 @@ This is the one place where single-server mode changes the origin files:
 
 If nginx must keep `:443` for another hostname, change `direct-reality` in the asset to `8443` and use that port in the direct profile instead. Do not leave both processes configured for `:443`; the second one fails to bind.
 
+## Keeping existing profiles working
+
+Switching the CDN origin replaces the server behind a hostname that already-imported profiles still use. If those profiles must keep working, run the old inbound next to the new one and route by path:
+
+1. Copy the old inbound verbatim into the new Xray config on a second loopback port, with its own path, its own `decryption`, and the same UUIDs. "Verbatim" includes `scMaxEachPostBytes`, `scMinPostsIntervalMs`, `uplinkChunkSize`, `uplinkDataPlacement`, `serverMaxHeaderBytes`, and the whole `xmux` object. A near-copy that relies on defaults is a different framing and will stall.
+2. Add a second nginx location for the old path pointing at that port. Prefix locations are matched longest-first, so `/api-stream2` and `/api-stream` can coexist without escaping.
+3. Prove the old framing before switching: build a client from the *old* server settings, not from the new preset, and run a session against the new server locally.
+4. Apply the same secret gate to both tunnel locations; the edge injects the header for both.
+5. Re-test the old profile through the edge after the switch. It inherits the edge quality of the day, so a stall rate can be higher than the new profile even though both hit the same origin.
+
+The old path carries whatever encryption the old inbound had (`none` for a pre-`vlessenc` profile). It is a compatibility path, not a second hardened one: retire it once every client has moved to the new profile.
+
 ## Setup
 
 1. Back up nginx, Xray, and the CDN resource as described in [operations.md](operations.md#backups).

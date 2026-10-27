@@ -128,10 +128,19 @@ Verified locally on 2026-10-26 with Xray 26.3.27 and nginx 1.26.3:
 - The `map`-based `X-CDN-Secret` gate returns `444` without the header, `204` with it, keeps `/health` and ACME open, and survives a duplicate header because nginx joins duplicates with `", "`.
 - `keepalive_requests` and `keepalive_timeout` are accepted in both `server` and `upstream` contexts.
 
+Verified in production on 2026-10-27 (Yandex Cloud CDN, Xray 26.10.21, nginx 1.26.3):
+
+- Single-server mode carried live sessions: the same host was CDN origin and exit, with the edge fetching origin over HTTP/80 and Xray routing to `freedom`.
+- A live edge injected the static `X-CDN-Secret` request header: `/_cdn_secret_probe` through the CDN returned `204` with `X-CDN-Secret-Seen: yes` while the same probe without the header returned `no`. The gate was enabled only after that signal.
+- `vlessenc` works end to end through a real edge: 10/10 XHTTP GET/header sessions on a verified edge. A client that omits the key against an encrypted inbound fails at the first packet.
+- Aggressive edge flapping persists after a resource change: during rollout, one edge still served the previous origin, one returned no response at all, and one carried 10/10 for the encrypted profile but 7–8/10 for an older xmux profile. Rank edges again after every origin switch.
+- Origin switching on the resource itself takes about 15 minutes to reach the edge fleet; `active: true` is not evidence of rollout. Distinguish origins by a response only the new one returns.
+- A resource update needs `origin-group create` in addition to `resource update`; a role can allow reading the group list and updating the resource without allowing `origin-group get`.
+
 Not verified, and not claimed:
 
-- That a live Yandex edge injects `X-CDN-Secret`. The feature is documented; prove it with `/_cdn_secret_probe` through the CDN before enforcing the gate.
-- `vlessenc` through a Yandex edge, and support in every mobile client. Keep a `none` fallback profile until the target device passes.
+- `vlessenc` support in every mobile client. Keep a `none` fallback profile until the target device passes.
+- That every edge in the fleet injects `X-CDN-Secret`. Test the edges you pin, and re-test after rotation, before relying on the gate.
 - `keepalive_requests 100000` as an optimum under a long production soak.
 - Yandex WebSocket (support enablement required; the tested edge passed no Upgrade).
 - VK: its CDN terms prohibit proxy/VPN use and traffic masking. Timeweb and Beget: provider notes only; no tested preset is shipped and this field study did not validate them.
