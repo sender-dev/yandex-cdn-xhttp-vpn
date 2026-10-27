@@ -15,32 +15,21 @@
             "flow": ""
           }
         ],
-        "decryption": "<VLESS_DECRYPTION_KEY>"
+        "decryption": "none"
       },
       "streamSettings": {
         "network": "xhttp",
         "security": "none",
         "xhttpSettings": {
-          "path": "/api-stream",
+          "path": "/api-stream2",
           "mode": "packet-up",
           "uplinkHTTPMethod": "GET",
           "uplinkDataPlacement": "header",
-          "uplinkDataKey": "X-Data",
-          "uplinkChunkSize": "3000-4000",
-          "scMaxEachPostBytes": 8192,
-          "scMaxBufferedPosts": 64,
+          "uplinkChunkSize": 16384,
+          "scMaxEachPostBytes": 32768,
+          "scMaxBufferedPosts": 30,
           "scMinPostsIntervalMs": 10,
-          "sessionPlacement": "header",
-          "sessionKey": "X-Auth-Token",
-          "seqPlacement": "query",
-          "seqKey": "page",
-          "xPaddingKey": "_rupl",
-          "xPaddingHeader": "X-Cache",
-          "xPaddingPlacement": "queryInHeader",
-          "xPaddingMethod": "tokenish",
-          "xPaddingObfsMode": true,
-          "xPaddingBytes": "100-1000",
-          "serverMaxHeaderBytes": 32768
+          "serverMaxHeaderBytes": 65536
         }
       }
     },
